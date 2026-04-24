@@ -1,0 +1,159 @@
+ARG BASE_IMAGE=ghcr.io/astral-sh/uv:0.11.6-python3.13-trixie@sha256:b3c543b6c4f23a5f2df22866bd7857e5d304b67a564f4feab6ac22044dde719b
+FROM ${BASE_IMAGE}
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONUNBUFFERED=1
+ENV HERMES_HOME=/opt/data
+
+ARG INSTALL_BROWSER=1
+ARG PREINSTALLED_PLAYWRIGHT=0
+ARG PLAYWRIGHT_BROWSERS_PATH_ARG=/opt/hermes/.playwright
+ARG PLAYWRIGHT_ONLY_SHELL=1
+ARG INSTALL_WHATSAPP_BRIDGE=0
+ARG APT_MIRROR=
+ARG APT_UPDATES_MIRROR=
+ARG APT_SECURITY_MIRROR=
+ARG NPM_REGISTRY=https://registry.npmjs.org
+ARG PIP_INDEX_URL=
+ARG UV_INDEX_URL=
+ARG PLAYWRIGHT_DOWNLOAD_HOST=
+
+ENV NPM_CONFIG_FUND=false
+ENV NPM_CONFIG_AUDIT=false
+ENV NPM_CONFIG_UPDATE_NOTIFIER=false
+ENV NPM_CONFIG_FETCH_RETRIES=5
+ENV NPM_CONFIG_FETCH_RETRY_MINTIMEOUT=20000
+ENV NPM_CONFIG_FETCH_RETRY_MAXTIMEOUT=120000
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1
+ENV UV_LINK_MODE=copy
+ENV PLAYWRIGHT_BROWSERS_PATH=${PLAYWRIGHT_BROWSERS_PATH_ARG}
+
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+    if [ -n "$APT_MIRROR" ]; then \
+        APT_SECURITY_EFFECTIVE="${APT_SECURITY_MIRROR:-$APT_MIRROR-security}"; \
+        APT_UPDATES_EFFECTIVE="${APT_UPDATES_MIRROR:-https://deb.debian.org/debian}"; \
+        if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
+            printf '%s\n' \
+                "Types: deb" \
+                "URIs: $APT_MIRROR" \
+                "Suites: trixie" \
+                "Components: main" \
+                "Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg" \
+                "" \
+                "Types: deb" \
+                "URIs: $APT_UPDATES_EFFECTIVE" \
+                "Suites: trixie-updates" \
+                "Components: main" \
+                "Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg" \
+                "" \
+                "Types: deb" \
+                "URIs: $APT_SECURITY_EFFECTIVE" \
+                "Suites: trixie-security" \
+                "Components: main" \
+                "Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg" \
+                > /etc/apt/sources.list.d/debian.sources; \
+        fi; \
+        if [ -f /etc/apt/sources.list ]; then \
+            sed -i "s|http://deb.debian.org/debian|$APT_MIRROR|g; s|http://security.debian.org/debian-security|$APT_SECURITY_EFFECTIVE|g" /etc/apt/sources.list; \
+        fi; \
+    fi && \
+    apt-get -o Acquire::Retries=5 update && \
+    apt-get -o Acquire::Retries=5 install -y --no-install-recommends \
+        build-essential \
+        nodejs \
+        npm \
+        python3 \
+        python3-pip \
+        ripgrep \
+        ffmpeg \
+        gcc \
+        gyp \
+        python3-dev \
+        libffi-dev \
+        procps \
+        git \
+        gosu \
+        openssh-client \
+        docker-cli
+
+RUN --mount=type=cache,target=/root/.cache/pip \
+    if [ -n "$PIP_INDEX_URL" ]; then \
+        export PIP_INDEX_URL="$PIP_INDEX_URL"; \
+        python3 -m pip install --break-system-packages gyp-next || \
+        PIP_INDEX_URL= python3 -m pip install --break-system-packages gyp-next; \
+    else \
+        python3 -m pip install --break-system-packages gyp-next; \
+    fi
+
+RUN if ! command -v uv >/dev/null 2>&1; then \
+        if [ -n "$PIP_INDEX_URL" ]; then \
+            export PIP_INDEX_URL="$PIP_INDEX_URL"; \
+            python3 -m pip install --break-system-packages uv || \
+            PIP_INDEX_URL= python3 -m pip install --break-system-packages uv; \
+        else \
+            python3 -m pip install --break-system-packages uv; \
+        fi; \
+    fi
+
+RUN useradd -u 10000 -m -d /opt/data hermes
+
+WORKDIR /opt/hermes
+
+COPY package.json package-lock.json /opt/hermes/
+COPY web/package.json web/package-lock.json /opt/hermes/web/
+
+RUN --mount=type=cache,target=/root/.npm \
+    npm config set registry "$NPM_REGISTRY" && \
+    npm ci --prefer-offline && \
+    cd /opt/hermes/web && npm ci --prefer-offline
+
+COPY pyproject.toml uv.lock /opt/hermes/
+
+COPY . /opt/hermes
+
+RUN --mount=type=cache,target=/root/.npm \
+    if [ "$INSTALL_WHATSAPP_BRIDGE" = "1" ] && [ -d /opt/hermes/scripts/whatsapp-bridge ]; then \
+        npm config set registry "$NPM_REGISTRY" && \
+        cd /opt/hermes/scripts/whatsapp-bridge && \
+        if [ -f package-lock.json ]; then npm ci --prefer-offline; else npm install --prefer-offline; fi; \
+    else \
+        echo "Skipping WhatsApp bridge dependencies"; \
+    fi
+
+RUN --mount=type=cache,target=/root/.cache/ms-playwright \
+    if [ "$PREINSTALLED_PLAYWRIGHT" = "1" ]; then \
+        echo "Skipping Playwright browser install: using browsers from base image at $PLAYWRIGHT_BROWSERS_PATH"; \
+    elif [ "$INSTALL_BROWSER" = "1" ]; then \
+        if [ -n "$PLAYWRIGHT_DOWNLOAD_HOST" ]; then export PLAYWRIGHT_DOWNLOAD_HOST="$PLAYWRIGHT_DOWNLOAD_HOST"; fi; \
+        export PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright; \
+        if [ "$PLAYWRIGHT_ONLY_SHELL" = "1" ]; then \
+            npx playwright install --with-deps chromium --only-shell; \
+        else \
+            npx playwright install --with-deps chromium; \
+        fi; \
+        mkdir -p /opt/hermes/.playwright && \
+        cp -a /root/.cache/ms-playwright/. /opt/hermes/.playwright/; \
+    else \
+        echo "Skipping Playwright browser install"; \
+    fi
+
+RUN cd /opt/hermes/web && npm run build
+
+RUN chown -R hermes:hermes /opt/hermes
+USER hermes
+
+RUN mkdir -p /tmp/uv-cache && \
+    if [ -n "$PIP_INDEX_URL" ]; then export PIP_INDEX_URL="$PIP_INDEX_URL"; fi && \
+    if [ -n "$UV_INDEX_URL" ]; then export UV_INDEX_URL="$UV_INDEX_URL"; elif [ -n "$PIP_INDEX_URL" ]; then export UV_INDEX_URL="$PIP_INDEX_URL"; fi && \
+    export UV_CACHE_DIR=/tmp/uv-cache && \
+    uv venv && \
+    (uv pip install -e ".[all]" || UV_INDEX_URL= PIP_INDEX_URL= uv pip install -e ".[all]")
+
+USER root
+RUN chmod +x /opt/hermes/docker/entrypoint.sh
+
+ENV HERMES_WEB_DIST=/opt/hermes/hermes_cli/web_dist
+
+VOLUME ["/opt/data"]
+ENTRYPOINT ["/opt/hermes/docker/entrypoint.sh"]

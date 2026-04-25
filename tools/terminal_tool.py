@@ -198,6 +198,7 @@ def set_approval_callback(cb):
 from tools.approval import (
     check_all_command_guards as _check_all_guards_impl,
 )
+from tools.protected_ops import protected_upgrade_terminal_block_message
 
 
 def _check_all_guards(command: str, env_type: str) -> dict:
@@ -1491,6 +1492,15 @@ def terminal_tool(
                     "error": guidance,
                     "status": "error",
                 }, ensure_ascii=False)
+
+        protected_block = protected_upgrade_terminal_block_message(command)
+        if protected_block:
+            return json.dumps({
+                "output": "",
+                "exit_code": -1,
+                "error": protected_block,
+                "status": "blocked",
+            }, ensure_ascii=False)
 
         # Start cleanup thread
         _start_cleanup_thread()

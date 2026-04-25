@@ -742,8 +742,9 @@ DEFAULT_CONFIG = {
         "memory_char_limit": 2200,   # ~800 tokens at 2.75 chars/token
         "user_char_limit": 1375,     # ~500 tokens at 2.75 chars/token
         # External memory provider plugin (empty = built-in only).
-        # Set to a provider name to activate: "openviking", "mem0",
-        # "hindsight", "holographic", "retaindb", "byterover".
+        # Set to a provider name to activate: "local_user_memory",
+        # "openviking", "mem0", "hindsight", "holographic",
+        # "retaindb", "byterover".
         # Only ONE external provider is allowed at a time.
         "provider": "",
     },
@@ -1544,6 +1545,90 @@ OPTIONAL_ENV_VARS = {
         "description": "Base URL for self-hosted Honcho instances (no API key needed)",
         "prompt": "Honcho base URL (e.g. http://localhost:8000)",
         "category": "tool",
+    },
+    "TEST_ENV_UPGRADE_ALLOWED_USERS": {
+        "description": "Comma-separated gateway user_ids allowed to trigger the protected test-environment upgrade",
+        "prompt": "Protected upgrade allowed user IDs (comma-separated)",
+        "password": False,
+        "category": "tool",
+        "advanced": True,
+    },
+    "TEST_ENV_UPGRADE_TRIGGER": {
+        "description": "Exact inbound trigger phrase required for the protected test-environment upgrade",
+        "prompt": "Protected upgrade trigger phrase",
+        "password": False,
+        "category": "tool",
+        "advanced": True,
+    },
+    "TEST_ENV_UPGRADE_ALLOWED_PLATFORMS": {
+        "description": "Comma-separated gateway platforms allowed to invoke the protected test-environment upgrade (default: feishu)",
+        "prompt": "Protected upgrade allowed platforms",
+        "password": False,
+        "category": "tool",
+        "advanced": True,
+    },
+    "TEST_ENV_UPGRADE_HOST": {
+        "description": "SSH host for the protected test-environment upgrade (default: 47.76.186.165)",
+        "prompt": "Protected upgrade SSH host",
+        "password": False,
+        "category": "tool",
+        "advanced": True,
+    },
+    "TEST_ENV_UPGRADE_SSH_USER": {
+        "description": "SSH user for the protected test-environment upgrade (default: root)",
+        "prompt": "Protected upgrade SSH user",
+        "password": False,
+        "category": "tool",
+        "advanced": True,
+    },
+    "TEST_ENV_UPGRADE_PASSWORD_FILE": {
+        "description": "Local password-file path read by sshpass for the protected test-environment upgrade",
+        "prompt": "Protected upgrade password file",
+        "password": False,
+        "category": "tool",
+        "advanced": True,
+    },
+    "TEST_ENV_UPGRADE_STEP1": {
+        "description": "Remote step-1 script path for the protected test-environment upgrade",
+        "prompt": "Protected upgrade step1 script",
+        "password": False,
+        "category": "tool",
+        "advanced": True,
+    },
+    "TEST_ENV_UPGRADE_STEP2": {
+        "description": "Remote step-2 script path for the protected test-environment upgrade",
+        "prompt": "Protected upgrade step2 script",
+        "password": False,
+        "category": "tool",
+        "advanced": True,
+    },
+    "TEST_ENV_UPGRADE_TIMEOUT_SECONDS": {
+        "description": "Timeout per protected test-environment upgrade step in seconds",
+        "prompt": "Protected upgrade timeout seconds",
+        "password": False,
+        "category": "tool",
+        "advanced": True,
+    },
+    "TEST_ENV_UPGRADE_STRIP_INVISIBLE": {
+        "description": "Strip invisible Unicode characters before matching the protected upgrade trigger",
+        "prompt": "Protected upgrade strip invisible chars",
+        "password": False,
+        "category": "tool",
+        "advanced": True,
+    },
+    "TEST_ENV_UPGRADE_COLLAPSE_WHITESPACE": {
+        "description": "Collapse whitespace before matching the protected upgrade trigger",
+        "prompt": "Protected upgrade collapse whitespace",
+        "password": False,
+        "category": "tool",
+        "advanced": True,
+    },
+    "TEST_ENV_UPGRADE_STRIP_FEISHU_MENTION_HINT": {
+        "description": "Strip leading Feishu mention-hint wrappers before matching the protected upgrade trigger",
+        "prompt": "Protected upgrade strip Feishu mention hint",
+        "password": False,
+        "category": "tool",
+        "advanced": True,
     },
 
     # ── Messaging platforms ──

@@ -1,0 +1,3 @@
+name: local_user_memory
+version: 0.1.0
+description: "Pure local per-user memory using SQLite and existing Hermes session history."

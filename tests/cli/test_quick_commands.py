@@ -1,8 +1,10 @@
 """Tests for user-defined quick commands that bypass the agent loop."""
 import subprocess
-from unittest.mock import MagicMock, patch, AsyncMock
+from unittest.mock import MagicMock, patch
 from rich.text import Text
 import pytest
+
+from gateway.platforms.base import MessageType
 
 
 # ── CLI tests ──────────────────────────────────────────────────────────────
@@ -139,6 +141,9 @@ class TestGatewayQuickCommands:
         event.source.platform.value = "telegram"
         event.source.chat_type = "dm"
         event.source.chat_id = "123"
+        event.source.user_id_alt = None
+        event.message_type = MessageType.TEXT
+        event.is_command.return_value = True
         return event
 
     @pytest.mark.asyncio

@@ -1178,6 +1178,31 @@ Usage: type `/status`, `/disk`, `/update`, or `/gpu` in the CLI or any messaging
 - **Type** — only `exec` is supported (runs a shell command); other types show an error
 - **Works everywhere** — CLI, Telegram, Discord, Slack, WhatsApp, Signal, Email, Home Assistant
 
+## Protected Agent Operations
+
+If you want the request to keep flowing through the agent, preserve transcript/memory, and still enforce a hard allowlist, use a dedicated protected tool plus `.env` config instead of `USER.md` prompt memory.
+
+Example `~/.hermes/.env`:
+
+```dotenv
+TEST_ENV_UPGRADE_ALLOWED_USERS=ou_243af32b7075711645b7531920429fe9,ou_another_authorized_user
+TEST_ENV_UPGRADE_TRIGGER=升级测试环境客户端
+TEST_ENV_UPGRADE_ALLOWED_PLATFORMS=feishu
+TEST_ENV_UPGRADE_HOST=47.76.186.165
+TEST_ENV_UPGRADE_SSH_USER=root
+TEST_ENV_UPGRADE_PASSWORD_FILE=/opt/data/loginTestEnv.conf
+TEST_ENV_UPGRADE_STEP1=/opt/sh/upgrade_frontend_step1.sh
+TEST_ENV_UPGRADE_STEP2=/opt/sh/upgrade_frontend_step2.sh
+TEST_ENV_UPGRADE_TIMEOUT_SECONDS=900
+```
+
+Behavior:
+
+- The agent still receives the message normally, so the turn is preserved in transcript/history
+- The protected tool checks both the sender `user_id` and the exact inbound trigger phrase in code
+- Raw `terminal()` access to the protected host / scripts is blocked, so the model cannot bypass the tool path
+- Every attempt is audit-logged under `HERMES_HOME/protected_ops_audit.jsonl`
+
 ## Human Delay
 
 Simulate human-like response pacing in messaging platforms:

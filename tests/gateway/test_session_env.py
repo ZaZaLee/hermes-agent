@@ -50,8 +50,9 @@ def test_set_session_env_sets_contextvars(monkeypatch):
     monkeypatch.delenv("HERMES_SESSION_USER_ID", raising=False)
     monkeypatch.delenv("HERMES_SESSION_USER_NAME", raising=False)
     monkeypatch.delenv("HERMES_SESSION_THREAD_ID", raising=False)
+    monkeypatch.delenv("HERMES_SESSION_MESSAGE_TEXT", raising=False)
 
-    tokens = runner._set_session_env(context)
+    tokens = runner._set_session_env(context, "hello world")
 
     # Values should be readable via get_session_env (contextvar path)
     assert get_session_env("HERMES_SESSION_PLATFORM") == "telegram"
@@ -60,6 +61,7 @@ def test_set_session_env_sets_contextvars(monkeypatch):
     assert get_session_env("HERMES_SESSION_USER_ID") == "123456"
     assert get_session_env("HERMES_SESSION_USER_NAME") == "alice"
     assert get_session_env("HERMES_SESSION_THREAD_ID") == "17585"
+    assert get_session_env("HERMES_SESSION_MESSAGE_TEXT") == "hello world"
 
     # os.environ should NOT be touched
     assert os.getenv("HERMES_SESSION_PLATFORM") is None
@@ -79,6 +81,7 @@ def test_clear_session_env_restores_previous_state(monkeypatch):
     monkeypatch.delenv("HERMES_SESSION_USER_ID", raising=False)
     monkeypatch.delenv("HERMES_SESSION_USER_NAME", raising=False)
     monkeypatch.delenv("HERMES_SESSION_THREAD_ID", raising=False)
+    monkeypatch.delenv("HERMES_SESSION_MESSAGE_TEXT", raising=False)
 
     source = SessionSource(
         platform=Platform.TELEGRAM,
@@ -91,9 +94,10 @@ def test_clear_session_env_restores_previous_state(monkeypatch):
     )
     context = SessionContext(source=source, connected_platforms=[], home_channels={})
 
-    tokens = runner._set_session_env(context)
+    tokens = runner._set_session_env(context, "hello world")
     assert get_session_env("HERMES_SESSION_PLATFORM") == "telegram"
     assert get_session_env("HERMES_SESSION_USER_ID") == "123456"
+    assert get_session_env("HERMES_SESSION_MESSAGE_TEXT") == "hello world"
 
     runner._clear_session_env(tokens)
 
@@ -104,6 +108,7 @@ def test_clear_session_env_restores_previous_state(monkeypatch):
     assert get_session_env("HERMES_SESSION_USER_ID") == ""
     assert get_session_env("HERMES_SESSION_USER_NAME") == ""
     assert get_session_env("HERMES_SESSION_THREAD_ID") == ""
+    assert get_session_env("HERMES_SESSION_MESSAGE_TEXT") == ""
 
 
 def test_get_session_env_falls_back_to_os_environ(monkeypatch):

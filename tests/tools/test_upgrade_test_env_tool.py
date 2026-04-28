@@ -1,4 +1,6 @@
 import json
+import os
+import subprocess
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -137,8 +139,8 @@ def test_upgrade_tool_runs_step1_then_step2_and_audits(monkeypatch, tmp_path):
 
     calls = []
 
-    def fake_run(argv, capture_output, text, timeout, check):
-        del capture_output, text, timeout, check
+    def fake_run(argv, capture_output, text, timeout, check, env=None, stdin=None):
+        del capture_output, text, timeout, check, env, stdin
         calls.append(argv)
         remote_command = argv[-1]
         if "upgrade_frontend_step1.sh" in remote_command:
@@ -179,3 +181,46 @@ def test_upgrade_tool_runs_step1_then_step2_and_audits(monkeypatch, tmp_path):
     last_entry = json.loads(audit_lines[-1])
     assert last_entry["status"] == "completed"
     assert last_entry["user_id"] == "ou_ops"
+
+
+def test_upgrade_tool_falls_back_to_askpass_when_sshpass_missing(monkeypatch, tmp_path):
+    password_file = tmp_path / "loginTestEnv.conf"
+    password_file.write_text("secret\n", encoding="utf-8")
+    monkeypatch.setenv("TEST_ENV_UPGRADE_ALLOWED_USERS", "ou_ops")
+    monkeypatch.setenv("TEST_ENV_UPGRADE_PASSWORD_FILE", str(password_file))
+
+    calls = []
+
+    def fake_run(argv, capture_output, text, timeout, check, env=None, stdin=None):
+        del capture_output, text, timeout, check
+        calls.append((argv, env, stdin))
+        return SimpleNamespace(returncode=0, stdout="ok\n", stderr="")
+
+    def fake_which(name):
+        mapping = {
+            "ssh": "/usr/bin/ssh",
+            "setsid": "/usr/bin/setsid",
+        }
+        return mapping.get(name)
+
+    tokens = set_session_vars(
+        platform="feishu",
+        user_id="ou_ops",
+        message_text="升级测试环境客户端",
+    )
+    try:
+        monkeypatch.setattr("tools.upgrade_test_env_tool.subprocess.run", fake_run)
+        monkeypatch.setattr("tools.upgrade_test_env_tool.shutil.which", fake_which)
+        result = json.loads(upgrade_test_env_client())
+    finally:
+        clear_session_vars(tokens)
+
+    assert result["success"] is True
+    assert len(calls) == 2
+    first_argv, first_env, first_stdin = calls[0]
+    assert first_argv[0] == "/usr/bin/setsid"
+    assert first_argv[1] == "/usr/bin/ssh"
+    assert first_env is not None
+    assert first_env["SSH_ASKPASS_REQUIRE"] == "force"
+    assert os.path.basename(first_env["SSH_ASKPASS"]).startswith("hermes-ssh-askpass-")
+    assert first_stdin is subprocess.DEVNULL

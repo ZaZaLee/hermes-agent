@@ -21,6 +21,7 @@ HARBOR_BASE_REPO="${HARBOR_BASE_REPO:-hermes-base}"
 HARBOR_BASE_TAG="${HARBOR_BASE_TAG:-base-20260425-v1}"
 HARBOR_APP_REPO="${HARBOR_APP_REPO:-hermes-agent}"
 HARBOR_APP_TAG="${HARBOR_APP_TAG:-app-20260425-v1}"
+LOCAL_APP_IMAGE="${LOCAL_APP_IMAGE:-hermes-agent:local}"
 PUSH_IMAGE="${PUSH_IMAGE:-0}"
 
 BASE_IMAGE="${BASE_IMAGE:-${HARBOR_REGISTRY}/${HARBOR_PROJECT}/${HARBOR_BASE_REPO}:${HARBOR_BASE_TAG}}"
@@ -92,9 +93,17 @@ if [[ "${PREINSTALLED_PLAYWRIGHT:-1}" == "1" ]]; then
 else
   echo "App build will install Playwright during the app layer build"
 fi
+BUILD_TAG_ARGS=(
+  -t "${APP_IMAGE}"
+)
+
+if [[ -n "${LOCAL_APP_IMAGE}" && "${LOCAL_APP_IMAGE}" != "${APP_IMAGE}" ]]; then
+  BUILD_TAG_ARGS+=(-t "${LOCAL_APP_IMAGE}")
+fi
+
 docker build \
   -f "${TMP_DOCKERFILE}" \
-  -t "${APP_IMAGE}" \
+  "${BUILD_TAG_ARGS[@]}" \
   "${BUILD_ARGS[@]}" \
   "${ROOT_DIR}"
 
@@ -104,3 +113,6 @@ if [[ "${PUSH_IMAGE}" == "1" ]]; then
 fi
 
 echo "Hermes image ready: ${APP_IMAGE}"
+if [[ -n "${LOCAL_APP_IMAGE}" ]]; then
+  echo "Local compose image ready: ${LOCAL_APP_IMAGE}"
+fi

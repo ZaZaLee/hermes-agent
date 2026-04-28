@@ -32,6 +32,7 @@ import base64
 import json
 import logging
 import os
+import time
 import uuid
 from pathlib import Path
 from typing import Any, Awaitable, Dict, Optional
@@ -462,6 +463,7 @@ async def vision_analyze_tool(
         from tools.interrupt import is_interrupted
         if is_interrupted():
             return tool_error("Interrupted", success=False)
+        started = time.monotonic()
 
         logger.info("Analyzing image: %s", image_url[:60])
         logger.info("User prompt: %s", user_prompt[:100])
@@ -575,6 +577,14 @@ async def vision_analyze_tool(
         }
         if model:
             call_kwargs["model"] = model
+        logger.info(
+            "Vision request prepared: mime=%s image_kb=%.1f data_url_kb=%.1f timeout=%.1fs model_override=%s",
+            detected_mime_type,
+            image_size_kb,
+            data_size_kb,
+            vision_timeout,
+            model or "<router default>",
+        )
         # Try full-size image first; on size-related rejection, downscale and retry.
         try:
             response = await async_call_llm(**call_kwargs)
@@ -605,7 +615,11 @@ async def vision_analyze_tool(
 
         analysis_length = len(analysis)
         
-        logger.info("Image analysis completed (%s characters)", analysis_length)
+        logger.info(
+            "Image analysis completed (%s characters, elapsed=%.2fs)",
+            analysis_length,
+            time.monotonic() - started,
+        )
         
         # Prepare successful response
         result = {

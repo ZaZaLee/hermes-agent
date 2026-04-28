@@ -2948,6 +2948,33 @@ def extract_content_or_reasoning(response) -> str:
     return ""
 
 
+def _response_text_lengths(response: Any) -> Tuple[int, int, Optional[str]]:
+    """Return (content_len, reasoning_len, finish_reason) for lightweight diagnostics."""
+    try:
+        choice = response.choices[0]
+        msg = choice.message
+    except Exception:
+        return 0, 0, None
+
+    content = getattr(msg, "content", None)
+    content_len = len(content.strip()) if isinstance(content, str) else 0
+
+    reasoning_parts: list[str] = []
+    for field in ("reasoning", "reasoning_content"):
+        val = getattr(msg, field, None)
+        if isinstance(val, str) and val.strip():
+            reasoning_parts.append(val.strip())
+    details = getattr(msg, "reasoning_details", None)
+    if isinstance(details, list):
+        for detail in details:
+            if isinstance(detail, dict):
+                summary = detail.get("summary") or detail.get("content") or detail.get("text")
+                if isinstance(summary, str) and summary.strip():
+                    reasoning_parts.append(summary.strip())
+    reasoning_len = len("\n\n".join(reasoning_parts))
+    return content_len, reasoning_len, getattr(choice, "finish_reason", None)
+
+
 async def async_call_llm(
     task: str = None,
     *,
@@ -3022,6 +3049,7 @@ async def async_call_llm(
                 f"Run: hermes setup")
 
     effective_timeout = timeout if timeout is not None else _get_task_timeout(task)
+    request_started = time.monotonic()
 
     # Pass the client's actual base_url (not just resolved_base_url) so
     # endpoint-specific temperature overrides can distinguish
@@ -3037,17 +3065,54 @@ async def async_call_llm(
     if _is_anthropic_compat_endpoint(resolved_provider, _client_base):
         kwargs["messages"] = _convert_openai_images_to_anthropic(kwargs["messages"])
 
+    if task == "vision":
+        logger.info(
+            "Aux vision request: requested_provider=%s resolved_provider=%s model=%s base=%s timeout=%.1fs max_tokens=%s temp=%s messages=%d",
+            provider or resolved_provider or "auto",
+            resolved_provider or "unknown",
+            final_model or resolved_model or model or "?",
+            base_url_hostname(_client_base or resolved_base_url or "") or (_client_base or resolved_base_url or ""),
+            float(effective_timeout),
+            max_tokens,
+            temperature,
+            len(messages or []),
+        )
+
     try:
-        return _validate_llm_response(
+        response = _validate_llm_response(
             await client.chat.completions.create(**kwargs), task)
+        if task == "vision":
+            content_len, reasoning_len, finish_reason = _response_text_lengths(response)
+            logger.info(
+                "Aux vision response: provider=%s model=%s finish_reason=%s content_len=%d reasoning_len=%d elapsed=%.2fs",
+                resolved_provider or "unknown",
+                final_model or resolved_model or model or "?",
+                finish_reason or "?",
+                content_len,
+                reasoning_len,
+                time.monotonic() - request_started,
+            )
+        return response
     except Exception as first_err:
         err_str = str(first_err)
         if "max_tokens" in err_str or "unsupported_parameter" in err_str:
             kwargs.pop("max_tokens", None)
             kwargs["max_completion_tokens"] = max_tokens
             try:
-                return _validate_llm_response(
+                response = _validate_llm_response(
                     await client.chat.completions.create(**kwargs), task)
+                if task == "vision":
+                    content_len, reasoning_len, finish_reason = _response_text_lengths(response)
+                    logger.info(
+                        "Aux vision response(after max_tokens retry): provider=%s model=%s finish_reason=%s content_len=%d reasoning_len=%d elapsed=%.2fs",
+                        resolved_provider or "unknown",
+                        final_model or resolved_model or model or "?",
+                        finish_reason or "?",
+                        content_len,
+                        reasoning_len,
+                        time.monotonic() - request_started,
+                    )
+                return response
             except Exception as retry_err:
                 # If the max_tokens retry also hits a payment or connection
                 # error, fall through to the fallback chain below.
@@ -3097,6 +3162,27 @@ async def async_call_llm(
                 async_fb, async_fb_model = _to_async_client(fb_client, fb_model or "")
                 if async_fb_model and async_fb_model != fb_kwargs.get("model"):
                     fb_kwargs["model"] = async_fb_model
-                return _validate_llm_response(
+                response = _validate_llm_response(
                     await async_fb.chat.completions.create(**fb_kwargs), task)
+                if task == "vision":
+                    content_len, reasoning_len, finish_reason = _response_text_lengths(response)
+                    logger.info(
+                        "Aux vision response(fallback): provider=%s model=%s finish_reason=%s content_len=%d reasoning_len=%d elapsed=%.2fs",
+                        fb_label or "unknown",
+                        async_fb_model or fb_model or "?",
+                        finish_reason or "?",
+                        content_len,
+                        reasoning_len,
+                        time.monotonic() - request_started,
+                    )
+                return response
+        if task == "vision":
+            logger.warning(
+                "Aux vision request failed: provider=%s model=%s base=%s elapsed=%.2fs error=%s",
+                resolved_provider or "unknown",
+                final_model or resolved_model or model or "?",
+                base_url_hostname(_client_base or resolved_base_url or "") or (_client_base or resolved_base_url or ""),
+                time.monotonic() - request_started,
+                first_err,
+            )
         raise

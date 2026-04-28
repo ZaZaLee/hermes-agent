@@ -8369,8 +8369,9 @@ class GatewayRunner:
 
         enriched_parts = []
         for path in image_paths:
+            _vision_started = time.monotonic()
             try:
-                logger.debug("Auto-analyzing user image: %s", path)
+                logger.info("Gateway vision pre-analysis start: path=%s", path)
                 result_json = await vision_analyze_tool(
                     image_url=path,
                     user_prompt=analysis_prompt,
@@ -8378,19 +8379,36 @@ class GatewayRunner:
                 result = json.loads(result_json)
                 if result.get("success"):
                     description = result.get("analysis", "")
+                    logger.info(
+                        "Gateway vision pre-analysis success: path=%s analysis_len=%d elapsed=%.2fs",
+                        path,
+                        len(description),
+                        time.monotonic() - _vision_started,
+                    )
                     enriched_parts.append(
                         f"[The user sent an image~ Here's what I can see:\n{description}]\n"
                         f"[If you need a closer look, use vision_analyze with "
                         f"image_url: {path} ~]"
                     )
                 else:
+                    logger.warning(
+                        "Gateway vision pre-analysis returned unsuccessful result: path=%s elapsed=%.2fs error=%s",
+                        path,
+                        time.monotonic() - _vision_started,
+                        result.get("error") or result.get("analysis") or "",
+                    )
                     enriched_parts.append(
                         "[The user sent an image but I couldn't quite see it "
                         "this time (>_<) You can try looking at it yourself "
                         f"with vision_analyze using image_url: {path}]"
                     )
             except Exception as e:
-                logger.error("Vision auto-analysis error: %s", e)
+                logger.error(
+                    "Vision auto-analysis error: path=%s elapsed=%.2fs error=%s",
+                    path,
+                    time.monotonic() - _vision_started,
+                    e,
+                )
                 enriched_parts.append(
                     f"[The user sent an image but something went wrong when I "
                     f"tried to look at it~ You can try examining it yourself "

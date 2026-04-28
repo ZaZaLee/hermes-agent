@@ -868,7 +868,7 @@ class TestPreprocessImagesWithVision:
         assert isinstance(result, str)
         assert "A test image with colored pixels." in result
         assert "Describe this" in result
-        assert str(img) in result
+        assert str(img) not in result
         assert "base64," not in result  # no raw base64 image content
 
     def test_multiple_images(self, cli, tmp_path):
@@ -878,9 +878,9 @@ class TestPreprocessImagesWithVision:
 
         assert isinstance(result, str)
         assert "Compare" in result
-        # Each image path should be referenced
+        # Successful pre-analysis should not expose internal cache paths
         for img in imgs:
-            assert str(img) in result
+            assert str(img) not in result
 
     def test_empty_text_gets_default_question(self, cli, tmp_path):
         img = self._make_image(tmp_path)
@@ -901,7 +901,7 @@ class TestPreprocessImagesWithVision:
         missing = tmp_path / "gone.png"
         with patch("tools.vision_tools.vision_analyze_tool", side_effect=self._mock_vision_success()):
             result = cli._preprocess_images_with_vision("test", [real, missing])
-        assert str(real) in result
+        assert str(real) not in result
         assert str(missing) not in result
         assert "test" in result
 

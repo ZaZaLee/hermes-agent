@@ -8386,9 +8386,7 @@ class GatewayRunner:
                         time.monotonic() - _vision_started,
                     )
                     enriched_parts.append(
-                        f"[The user sent an image~ Here's what I can see:\n{description}]\n"
-                        f"[If you need a closer look, use vision_analyze with "
-                        f"image_url: {path} ~]"
+                        f"[The user sent an image~ Here's what I can see:\n{description}]"
                     )
                 else:
                     logger.warning(

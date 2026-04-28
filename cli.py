@@ -4032,7 +4032,7 @@ class HermesCLI:
         same approach the messaging gateway uses.
 
         The local file path is included so the agent can re-examine the
-        image later with ``vision_analyze`` if needed.
+        image later with ``vision_analyze`` if the analysis fails.
         """
         import asyncio as _asyncio
         from tools.vision_tools import vision_analyze_tool
@@ -4058,9 +4058,7 @@ class HermesCLI:
                 if result.get("success"):
                     description = result.get("analysis", "")
                     enriched_parts.append(
-                        f"[The user attached an image. Here's what it contains:\n{description}]\n"
-                        f"[If you need a closer look, use vision_analyze with "
-                        f"image_url: {img_path}]"
+                        f"[The user attached an image. Here's what it contains:\n{description}]"
                     )
                     if announce:
                         _cprint(f"  {_DIM}✓ image analyzed{_RST}")

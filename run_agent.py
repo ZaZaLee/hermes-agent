@@ -741,6 +741,7 @@ class AIAgent:
         prefill_messages: List[Dict[str, Any]] = None,
         platform: str = None,
         user_id: str = None,
+        user_id_alt: str = None,
         user_name: str = None,
         chat_id: str = None,
         chat_name: str = None,
@@ -815,6 +816,7 @@ class AIAgent:
         self.ephemeral_system_prompt = ephemeral_system_prompt
         self.platform = platform  # "cli", "telegram", "discord", "whatsapp", etc.
         self._user_id = user_id  # Platform user identifier (gateway sessions)
+        self._user_id_alt = user_id_alt
         self._user_name = user_name
         self._chat_id = chat_id
         self._chat_name = chat_name
@@ -1482,6 +1484,8 @@ class AIAgent:
                         # Thread gateway user identity for per-user memory scoping
                         if self._user_id:
                             _init_kwargs["user_id"] = self._user_id
+                        if self._user_id_alt:
+                            _init_kwargs["user_id_alt"] = self._user_id_alt
                         if self._user_name:
                             _init_kwargs["user_name"] = self._user_name
                         if self._chat_id:
@@ -2345,7 +2349,8 @@ class AIAgent:
             return True
 
         user_id = str(self._user_id or "").strip()
-        if not user_id:
+        user_id_alt = str(self._user_id_alt or "").strip()
+        if not user_id and not user_id_alt:
             return False
 
         allowed_ids = set()
@@ -2356,9 +2361,15 @@ class AIAgent:
         if "*" in allowed_ids:
             return True
 
-        check_ids = {user_id}
+        check_ids = set()
+        if user_id:
+            check_ids.add(user_id)
+        if user_id_alt:
+            check_ids.add(user_id_alt)
         if "@" in user_id:
             check_ids.add(user_id.split("@")[0])
+        if "@" in user_id_alt:
+            check_ids.add(user_id_alt.split("@")[0])
         return bool(check_ids & allowed_ids)
 
     def _memory_write_denied_result(self) -> str:

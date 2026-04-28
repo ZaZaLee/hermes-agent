@@ -21,7 +21,7 @@ def _make_tool_defs(*names: str) -> list:
     ]
 
 
-def _make_agent(*, platform="feishu", user_id="ou_user", skip_memory=True) -> AIAgent:
+def _make_agent(*, platform="feishu", user_id="ou_user", user_id_alt=None, skip_memory=True) -> AIAgent:
     with (
         patch("run_agent.get_tool_definitions", return_value=_make_tool_defs("memory")),
         patch("run_agent.check_toolset_requirements", return_value={}),
@@ -35,6 +35,7 @@ def _make_agent(*, platform="feishu", user_id="ou_user", skip_memory=True) -> AI
             skip_memory=skip_memory,
             platform=platform,
             user_id=user_id,
+            user_id_alt=user_id_alt,
         )
     agent.client = MagicMock()
     return agent
@@ -85,6 +86,26 @@ def test_admin_gateway_user_can_write_memory(monkeypatch):
     memory_tool.assert_called_once()
 
 
+def test_admin_gateway_user_alt_id_can_write_memory(monkeypatch):
+    monkeypatch.setenv("FEISHU_MEMORY_ADMIN_USERS", "on_admin")
+    monkeypatch.delenv("GATEWAY_MEMORY_ADMIN_USERS", raising=False)
+    agent = _make_agent(user_id="ou_guest", user_id_alt="on_admin")
+
+    with patch(
+        "tools.memory_tool.memory_tool",
+        return_value=json.dumps({"success": True, "target": "user"}),
+    ) as memory_tool:
+        result = agent._invoke_tool(
+            "memory",
+            {"action": "add", "target": "user", "content": "Name: admin"},
+            effective_task_id="task-1",
+        )
+
+    payload = json.loads(result)
+    assert payload["success"] is True
+    memory_tool.assert_called_once()
+
+
 def test_non_admin_gateway_user_cannot_call_external_memory_tools(monkeypatch):
     monkeypatch.setenv("FEISHU_MEMORY_ADMIN_USERS", "ou_admin")
     monkeypatch.delenv("GATEWAY_MEMORY_ADMIN_USERS", raising=False)
@@ -115,4 +136,3 @@ def test_non_admin_session_end_skips_provider_extraction(monkeypatch):
 
     agent._memory_manager.on_session_end.assert_not_called()
     agent._memory_manager.shutdown_all.assert_called_once()
-

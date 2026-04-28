@@ -35,6 +35,7 @@ Payment / credit exhaustion fallback:
 """
 
 import json
+import ipaddress
 import logging
 import os
 import threading
@@ -42,6 +43,7 @@ import time
 from pathlib import Path  # noqa: F401 — used by test mocks
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import urlparse
 
 from openai import OpenAI
 
@@ -562,6 +564,67 @@ class AsyncCodexAuxiliaryClient:
         self.chat = _AsyncCodexChatShim(async_adapter)
         self.api_key = sync_wrapper.api_key
         self.base_url = sync_wrapper.base_url
+
+
+class _AsyncOpenAIThreadedCompletionsAdapter:
+    """Async facade that executes sync OpenAI-compatible calls in a worker thread."""
+
+    def __init__(self, sync_create: Any):
+        self._sync_create = sync_create
+
+    async def create(self, **kwargs) -> Any:
+        import asyncio
+        return await asyncio.to_thread(self._sync_create, **kwargs)
+
+
+class _AsyncOpenAIThreadedChatShim:
+    def __init__(self, sync_wrapper: Any):
+        self.completions = _AsyncOpenAIThreadedCompletionsAdapter(
+            sync_wrapper.chat.completions.create
+        )
+
+
+class AsyncOpenAIThreadedClient:
+    """Async-compatible wrapper for sync OpenAI clients on flaky local endpoints."""
+
+    def __init__(self, sync_wrapper: Any):
+        self._sync = sync_wrapper
+        self.chat = _AsyncOpenAIThreadedChatShim(sync_wrapper)
+        self.api_key = getattr(sync_wrapper, "api_key", None)
+        self.base_url = getattr(sync_wrapper, "base_url", None)
+
+    async def close(self) -> None:
+        close_fn = getattr(self._sync, "close", None)
+        if callable(close_fn):
+            import asyncio
+            await asyncio.to_thread(close_fn)
+
+
+def _hostname_is_private(hostname: str) -> bool:
+    value = str(hostname or "").strip()
+    if not value:
+        return False
+    if value in {"localhost", "localhost.localdomain"}:
+        return True
+    try:
+        ip = ipaddress.ip_address(value)
+    except ValueError:
+        return False
+    return (
+        ip.is_private
+        or ip.is_loopback
+        or ip.is_link_local
+    )
+
+
+def _prefer_threaded_async_wrapper(sync_base_url: str) -> bool:
+    """Return True for local/private OpenAI-compatible endpoints that hang with AsyncOpenAI."""
+    try:
+        parsed = urlparse(sync_base_url)
+    except Exception:
+        return False
+    host = parsed.hostname or ""
+    return _hostname_is_private(host)
 
 
 class _AnthropicCompletionsAdapter:
@@ -1513,11 +1576,18 @@ def _to_async_client(sync_client, model: str):
     except ImportError:
         pass
 
+    sync_base_url = str(sync_client.base_url)
+    if _prefer_threaded_async_wrapper(sync_base_url):
+        logger.info(
+            "Auxiliary client: using threaded async wrapper for local/private endpoint %s",
+            base_url_hostname(sync_base_url) or sync_base_url,
+        )
+        return AsyncOpenAIThreadedClient(sync_client), model
+
     async_kwargs = {
         "api_key": sync_client.api_key,
-        "base_url": str(sync_client.base_url),
+        "base_url": sync_base_url,
     }
-    sync_base_url = str(sync_client.base_url)
     if base_url_host_matches(sync_base_url, "openrouter.ai"):
         async_kwargs["default_headers"] = dict(_OR_HEADERS)
     elif base_url_host_matches(sync_base_url, "api.githubcopilot.com"):

@@ -2309,6 +2309,106 @@ class AIAgent:
             except Exception:
                 pass
 
+    def _memory_admin_env_names(self) -> tuple[str, str]:
+        """Return (platform-specific, global) env vars controlling memory writes."""
+        platform_key = str(self.platform or "").strip().lower()
+        platform_env_map = {
+            "telegram": "TELEGRAM_MEMORY_ADMIN_USERS",
+            "discord": "DISCORD_MEMORY_ADMIN_USERS",
+            "whatsapp": "WHATSAPP_MEMORY_ADMIN_USERS",
+            "slack": "SLACK_MEMORY_ADMIN_USERS",
+            "signal": "SIGNAL_MEMORY_ADMIN_USERS",
+            "email": "EMAIL_MEMORY_ADMIN_USERS",
+            "sms": "SMS_MEMORY_ADMIN_USERS",
+            "mattermost": "MATTERMOST_MEMORY_ADMIN_USERS",
+            "matrix": "MATRIX_MEMORY_ADMIN_USERS",
+            "dingtalk": "DINGTALK_MEMORY_ADMIN_USERS",
+            "feishu": "FEISHU_MEMORY_ADMIN_USERS",
+            "wecom": "WECOM_MEMORY_ADMIN_USERS",
+            "wecom_callback": "WECOM_CALLBACK_MEMORY_ADMIN_USERS",
+            "weixin": "WEIXIN_MEMORY_ADMIN_USERS",
+            "bluebubbles": "BLUEBUBBLES_MEMORY_ADMIN_USERS",
+            "qqbot": "QQ_MEMORY_ADMIN_USERS",
+        }
+        return platform_env_map.get(platform_key, ""), "GATEWAY_MEMORY_ADMIN_USERS"
+
+    def _is_memory_write_authorized(self) -> bool:
+        """Return True when this session may persist or mutate memory."""
+        platform_key = str(self.platform or "").strip().lower()
+        if not platform_key or platform_key in {"cli", "local"}:
+            return True
+
+        platform_env, global_env = self._memory_admin_env_names()
+        platform_allowlist = os.getenv(platform_env, "").strip() if platform_env else ""
+        global_allowlist = os.getenv(global_env, "").strip()
+        if not platform_allowlist and not global_allowlist:
+            return True
+
+        user_id = str(self._user_id or "").strip()
+        if not user_id:
+            return False
+
+        allowed_ids = set()
+        if platform_allowlist:
+            allowed_ids.update(uid.strip() for uid in platform_allowlist.split(",") if uid.strip())
+        if global_allowlist:
+            allowed_ids.update(uid.strip() for uid in global_allowlist.split(",") if uid.strip())
+        if "*" in allowed_ids:
+            return True
+
+        check_ids = {user_id}
+        if "@" in user_id:
+            check_ids.add(user_id.split("@")[0])
+        return bool(check_ids & allowed_ids)
+
+    def _memory_write_denied_result(self) -> str:
+        """Standard tool error returned when a non-admin tries to write memory."""
+        platform_env, global_env = self._memory_admin_env_names()
+        names = [name for name in (platform_env, global_env) if name]
+        hint = f" Configure {', '.join(names)} to choose who may write memory." if names else ""
+        return json.dumps(
+            {
+                "success": False,
+                "error": (
+                    "Memory writes are restricted to configured admins for this gateway."
+                    + hint
+                ),
+            },
+            ensure_ascii=False,
+        )
+
+    def _handle_memory_tool_call(self, function_args: dict) -> str:
+        """Execute the built-in memory tool, respecting admin write restrictions."""
+        if not self._is_memory_write_authorized():
+            logger.info(
+                "Blocked memory write for non-admin user_id=%s platform=%s session_id=%s",
+                self._user_id or "",
+                self.platform or "",
+                self.session_id or "",
+            )
+            return self._memory_write_denied_result()
+
+        target = function_args.get("target", "memory")
+        from tools.memory_tool import memory_tool as _memory_tool
+        result = _memory_tool(
+            action=function_args.get("action"),
+            target=target,
+            content=function_args.get("content"),
+            old_text=function_args.get("old_text"),
+            store=self._memory_store,
+        )
+        # Bridge: notify external memory provider of built-in memory writes
+        if self._memory_manager and function_args.get("action") in ("add", "replace"):
+            try:
+                self._memory_manager.on_memory_write(
+                    function_args.get("action", ""),
+                    target,
+                    function_args.get("content", ""),
+                )
+            except Exception:
+                pass
+        return result
+
     def _is_direct_openai_url(self, base_url: str = None) -> bool:
         """Return True when a base URL targets OpenAI's native API."""
         if base_url is not None:
@@ -3875,10 +3975,11 @@ class AIAgent:
         session expiry, etc.
         """
         if self._memory_manager:
-            try:
-                self._memory_manager.on_session_end(messages or [])
-            except Exception:
-                pass
+            if self._is_memory_write_authorized():
+                try:
+                    self._memory_manager.on_session_end(messages or [])
+                except Exception:
+                    pass
             try:
                 self._memory_manager.shutdown_all()
             except Exception:
@@ -3898,7 +3999,7 @@ class AIAgent:
         Called when session_id rotates (e.g. /new, context compression);
         providers keep their state and continue running under the old
         session_id — they just flush pending extraction now."""
-        if not self._memory_manager:
+        if not self._memory_manager or not self._is_memory_write_authorized():
             return
         try:
             self._memory_manager.on_session_end(messages or [])
@@ -7711,27 +7812,17 @@ class AIAgent:
                 current_session_id=self.session_id,
             )
         elif function_name == "memory":
-            target = function_args.get("target", "memory")
-            from tools.memory_tool import memory_tool as _memory_tool
-            result = _memory_tool(
-                action=function_args.get("action"),
-                target=target,
-                content=function_args.get("content"),
-                old_text=function_args.get("old_text"),
-                store=self._memory_store,
-            )
-            # Bridge: notify external memory provider of built-in memory writes
-            if self._memory_manager and function_args.get("action") in ("add", "replace"):
-                try:
-                    self._memory_manager.on_memory_write(
-                        function_args.get("action", ""),
-                        target,
-                        function_args.get("content", ""),
-                    )
-                except Exception:
-                    pass
-            return result
+            return self._handle_memory_tool_call(function_args)
         elif self._memory_manager and self._memory_manager.has_tool(function_name):
+            if not self._is_memory_write_authorized():
+                logger.info(
+                    "Blocked external memory tool '%s' for non-admin user_id=%s platform=%s session_id=%s",
+                    function_name,
+                    self._user_id or "",
+                    self.platform or "",
+                    self.session_id or "",
+                )
+                return self._memory_write_denied_result()
             return self._memory_manager.handle_tool_call(function_name, function_args)
         elif function_name == "clarify":
             from tools.clarify_tool import clarify_tool as _clarify_tool
@@ -8222,25 +8313,7 @@ class AIAgent:
                 if self._should_emit_quiet_tool_messages():
                     self._vprint(f"  {_get_cute_tool_message_impl('session_search', function_args, tool_duration, result=function_result)}")
             elif function_name == "memory":
-                target = function_args.get("target", "memory")
-                from tools.memory_tool import memory_tool as _memory_tool
-                function_result = _memory_tool(
-                    action=function_args.get("action"),
-                    target=target,
-                    content=function_args.get("content"),
-                    old_text=function_args.get("old_text"),
-                    store=self._memory_store,
-                )
-                # Bridge: notify external memory provider of built-in memory writes
-                if self._memory_manager and function_args.get("action") in ("add", "replace"):
-                    try:
-                        self._memory_manager.on_memory_write(
-                            function_args.get("action", ""),
-                            target,
-                            function_args.get("content", ""),
-                        )
-                    except Exception:
-                        pass
+                function_result = self._handle_memory_tool_call(function_args)
                 tool_duration = time.time() - tool_start_time
                 if self._should_emit_quiet_tool_messages():
                     self._vprint(f"  {_get_cute_tool_message_impl('memory', function_args, tool_duration, result=function_result)}")
@@ -8314,18 +8387,32 @@ class AIAgent:
                     spinner.start()
                 _mem_result = None
                 try:
-                    function_result = self._memory_manager.handle_tool_call(function_name, function_args)
-                    _mem_result = function_result
-                except Exception as tool_error:
-                    function_result = json.dumps({"error": f"Memory tool '{function_name}' failed: {tool_error}"})
-                    logger.error("memory_manager.handle_tool_call raised for %s: %s", function_name, tool_error, exc_info=True)
+                    if not self._is_memory_write_authorized():
+                        logger.info(
+                            "Blocked external memory tool '%s' for non-admin user_id=%s platform=%s session_id=%s",
+                            function_name,
+                            self._user_id or "",
+                            self.platform or "",
+                            self.session_id or "",
+                        )
+                        function_result = self._memory_write_denied_result()
+                    else:
+                        try:
+                            function_result = self._memory_manager.handle_tool_call(function_name, function_args)
+                            _mem_result = function_result
+                        except Exception as tool_error:
+                            function_result = json.dumps({"error": f"Memory tool '{function_name}' failed: {tool_error}"})
+                            logger.error("memory_manager.handle_tool_call raised for %s: %s", function_name, tool_error, exc_info=True)
                 finally:
-                    tool_duration = time.time() - tool_start_time
-                    cute_msg = _get_cute_tool_message_impl(function_name, function_args, tool_duration, result=_mem_result)
-                    if spinner:
-                        spinner.stop(cute_msg)
-                    elif self._should_emit_quiet_tool_messages():
-                        self._vprint(f"  {cute_msg}")
+                    try:
+                        tool_duration = time.time() - tool_start_time
+                        cute_msg = _get_cute_tool_message_impl(function_name, function_args, tool_duration, result=_mem_result)
+                        if spinner:
+                            spinner.stop(cute_msg)
+                        elif self._should_emit_quiet_tool_messages():
+                            self._vprint(f"  {cute_msg}")
+                    except Exception:
+                        pass
             elif self.quiet_mode:
                 spinner = None
                 if self._should_emit_quiet_tool_messages() and self._should_start_quiet_spinner():
@@ -11899,7 +11986,8 @@ class AIAgent:
         # injected skill content that bloats / breaks provider queries.
         if self._memory_manager and final_response and original_user_message:
             try:
-                self._memory_manager.sync_all(original_user_message, final_response)
+                if self._is_memory_write_authorized():
+                    self._memory_manager.sync_all(original_user_message, final_response)
                 self._memory_manager.queue_prefetch_all(original_user_message)
             except Exception:
                 pass

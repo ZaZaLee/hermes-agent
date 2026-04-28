@@ -207,6 +207,27 @@ def current_upgrade_request_is_authorized(
     return True, ""
 
 
+def current_message_requests_test_env_upgrade(
+    cfg: TestEnvUpgradeConfig | None = None,
+) -> bool:
+    """Return True when the inbound gateway message exactly matches the trigger."""
+    cfg = cfg or load_test_env_upgrade_config()
+    current_message = get_session_env("HERMES_SESSION_MESSAGE_TEXT", "")
+    observed_text = normalize_trigger_text(
+        current_message,
+        strip_invisible=cfg.strip_invisible,
+        collapse_whitespace=cfg.collapse_whitespace,
+        strip_feishu_mention_hint=cfg.strip_feishu_mention_hint,
+    )
+    expected_text = normalize_trigger_text(
+        cfg.trigger,
+        strip_invisible=cfg.strip_invisible,
+        collapse_whitespace=cfg.collapse_whitespace,
+        strip_feishu_mention_hint=False,
+    )
+    return bool(observed_text) and observed_text == expected_text
+
+
 def protected_upgrade_terminal_block_message(
     command: str,
     cfg: TestEnvUpgradeConfig | None = None,

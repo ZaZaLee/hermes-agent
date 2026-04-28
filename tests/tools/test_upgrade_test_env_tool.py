@@ -4,6 +4,7 @@ from unittest.mock import MagicMock
 
 from gateway.session_context import clear_session_vars, set_session_vars
 from tools.protected_ops import (
+    current_message_requests_test_env_upgrade,
     current_upgrade_request_is_authorized,
     protected_upgrade_terminal_block_message,
 )
@@ -26,6 +27,22 @@ def test_authorization_accepts_exact_trigger_after_invisible_char_normalization(
 
     assert authorized is True
     assert reason == ""
+
+
+def test_trigger_match_detects_exact_trigger_after_mention_hint(monkeypatch):
+    monkeypatch.setenv("TEST_ENV_UPGRADE_ALLOWED_USERS", "ou_allowed")
+
+    tokens = set_session_vars(
+        platform="feishu",
+        user_id="ou_allowed",
+        message_text="[Mentioned: 佳爷飞书分爷]\n\n升级测试环境客户端",
+    )
+    try:
+        matched = current_message_requests_test_env_upgrade()
+    finally:
+        clear_session_vars(tokens)
+
+    assert matched is True
 
 
 def test_authorization_rejects_unauthorized_user(monkeypatch):

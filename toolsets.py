@@ -32,7 +32,7 @@ _HERMES_CORE_TOOLS = [
     # Web
     "web_search", "web_extract", "feishu_doc_read",
     # Terminal + process management
-    "terminal", "process", "upgrade_test_env_client",
+    "terminal", "process",
     # File manipulation
     "read_file", "write_file", "patch", "search_files",
     # Vision + image generation
@@ -249,7 +249,7 @@ TOOLSETS = {
         "description": "Editor integration (VS Code, Zed, JetBrains) — coding-focused tools without messaging, audio, or clarify UI",
         "tools": [
             "web_search", "web_extract", "feishu_doc_read",
-            "terminal", "process", "upgrade_test_env_client",
+            "terminal", "process",
             "read_file", "write_file", "patch", "search_files",
             "vision_analyze",
             "skills_list", "skill_view", "skill_manage",

@@ -283,6 +283,11 @@ from gateway.session import (
     build_session_key,
     is_shared_multi_user_session,
 )
+from tools.protected_ops import (
+    current_message_requests_test_env_upgrade,
+    load_test_env_upgrade_config,
+)
+from tools.upgrade_test_env_tool import upgrade_test_env_client
 from gateway.delivery import DeliveryRouter
 from gateway.platforms.base import (
     BasePlatformAdapter,
@@ -4185,6 +4190,17 @@ class GatewayRunner:
 
         # Load conversation history from transcript
         history = self.session_store.load_transcript(session_entry.session_id)
+
+        protected_result = await self._maybe_handle_protected_upgrade_trigger(
+            source=source,
+            session_entry=session_entry,
+            history=history,
+            message_text=event.text or "",
+        )
+        if protected_result is not None:
+            self.session_store.update_session(session_key)
+            self._clear_session_env(_session_env_tokens)
+            return protected_result
         
         # -----------------------------------------------------------------
         # Session hygiene: auto-compress pathologically large transcripts
@@ -8229,6 +8245,92 @@ class GatewayRunner:
         """Restore session context variables to their pre-handler values."""
         from gateway.session_context import clear_session_vars
         clear_session_vars(tokens)
+
+    @staticmethod
+    def _format_protected_upgrade_result(result: dict) -> str:
+        """Render a user-facing reply from upgrade_test_env_client JSON."""
+        if not isinstance(result, dict):
+            return "Protected test-environment upgrade failed: invalid tool result."
+
+        if not result.get("success"):
+            error = result.get("error") or "Protected test-environment upgrade failed."
+            parts = [error]
+            step1 = result.get("step1")
+            if isinstance(step1, dict):
+                stdout = (step1.get("stdout") or "").strip()
+                stderr = (step1.get("stderr") or "").strip()
+                if stdout:
+                    parts.append(f"step1 stdout:\n{stdout}")
+                if stderr:
+                    parts.append(f"step1 stderr:\n{stderr}")
+            return "\n\n".join(parts)
+
+        parts = [result.get("summary") or "Protected test-environment client upgrade completed successfully."]
+        step1 = result.get("step1")
+        step2 = result.get("step2")
+        if isinstance(step1, dict):
+            parts.append(f"step1 returncode: {step1.get('returncode', '')}")
+            stdout = (step1.get("stdout") or "").strip()
+            stderr = (step1.get("stderr") or "").strip()
+            if stdout:
+                parts.append(f"step1 stdout:\n{stdout}")
+            if stderr:
+                parts.append(f"step1 stderr:\n{stderr}")
+        if isinstance(step2, dict):
+            parts.append(f"step2 returncode: {step2.get('returncode', '')}")
+            stdout = (step2.get("stdout") or "").strip()
+            stderr = (step2.get("stderr") or "").strip()
+            if stdout:
+                parts.append(f"step2 stdout:\n{stdout}")
+            if stderr:
+                parts.append(f"step2 stderr:\n{stderr}")
+        return "\n\n".join(parts)
+
+    async def _maybe_handle_protected_upgrade_trigger(
+        self,
+        *,
+        source,
+        session_entry,
+        history,
+        message_text: str,
+    ) -> Optional[dict]:
+        """Handle the protected test-env upgrade trigger before invoking the model."""
+        try:
+            cfg = load_test_env_upgrade_config()
+            if not current_message_requests_test_env_upgrade(cfg):
+                return None
+
+            result_json = await asyncio.to_thread(upgrade_test_env_client)
+            result = json.loads(result_json)
+            response = self._format_protected_upgrade_result(result)
+            return {
+                "final_response": response,
+                "messages": [],
+                "api_calls": 0,
+                "tools": [{"type": "function", "function": {"name": "upgrade_test_env_client"}}],
+                "history_offset": len(history),
+                "last_prompt_tokens": 0,
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "model": "protected_ops",
+                "session_id": session_entry.session_id,
+                "response_previewed": False,
+            }
+        except Exception as exc:
+            logger.exception("Protected upgrade trigger handling failed")
+            return {
+                "final_response": f"Protected test-environment upgrade failed to start: {exc}",
+                "messages": [],
+                "api_calls": 0,
+                "tools": [],
+                "history_offset": len(history),
+                "last_prompt_tokens": 0,
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "model": "protected_ops",
+                "session_id": session_entry.session_id,
+                "response_previewed": False,
+            }
 
     async def _run_in_executor_with_context(self, func, *args):
         """Run blocking work in the thread pool while preserving session contextvars."""

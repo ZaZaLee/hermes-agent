@@ -2,6 +2,7 @@
 
 from tools.registry import ToolRegistry
 from toolsets import (
+    _HERMES_CORE_TOOLS,
     TOOLSETS,
     get_toolset,
     resolve_toolset,
@@ -214,6 +215,12 @@ class TestToolsetConsistency:
         # Sanity: the shared core must be non-trivial (i.e. we didn't
         # silently let a platform diverge so far that nothing is shared).
         assert len(core) > 20, f"Suspiciously small shared core: {len(core)} tools"
+
+    def test_protected_upgrade_tool_not_exposed_in_default_core_toolsets(self):
+        """High-risk protected ops must not depend on model self-selection."""
+        assert "upgrade_test_env_client" not in _HERMES_CORE_TOOLS
+        assert "upgrade_test_env_client" not in TOOLSETS["hermes-acp"]["tools"]
+        assert TOOLSETS["protected_ops"]["tools"] == ["upgrade_test_env_client"]
 
 
 class TestPluginToolsets:

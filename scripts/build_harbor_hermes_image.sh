@@ -5,6 +5,10 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SOURCE_DOCKERFILE="${ROOT_DIR}/Dockerfile.ghcr"
 
+echo "Updating source tree in ${ROOT_DIR}"
+git -C "${ROOT_DIR}" fetch origin
+git -C "${ROOT_DIR}" reset --hard origin/main
+
 HARBOR_REGISTRY="${HARBOR_REGISTRY:-127.0.0.1:81}"
 HARBOR_URL="${HARBOR_URL:-http://127.0.0.1:81}"
 HARBOR_USERNAME="${HARBOR_USERNAME:-admin}"

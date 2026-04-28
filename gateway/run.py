@@ -3133,7 +3133,7 @@ class GatewayRunner:
 
         return "pair"
 
-    async def _handle_message(self, event: MessageEvent) -> Optional[str]:
+    async def _handle_message(self, event: MessageEvent) -> Optional[str | Dict[str, Any]]:
         """
         Handle an incoming message from any platform.
         

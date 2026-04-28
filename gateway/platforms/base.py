@@ -846,7 +846,8 @@ _RETRYABLE_ERROR_PATTERNS = (
 
 
 # Type for message handlers
-MessageHandler = Callable[[MessageEvent], Awaitable[Optional[str]]]
+GatewayHandlerResponse = Optional[str | Dict[str, Any]]
+MessageHandler = Callable[[MessageEvent], Awaitable[GatewayHandlerResponse]]
 
 
 def resolve_channel_prompt(
@@ -1036,9 +1037,34 @@ class BasePlatformAdapter(ABC):
         Set the handler for incoming messages.
         
         The handler receives a MessageEvent and should return
-        an optional response string.
+        either an optional response string or an agent-style result dict.
         """
         self._message_handler = handler
+
+    @staticmethod
+    def _normalize_handler_response(response: GatewayHandlerResponse) -> Optional[str]:
+        """Collapse gateway handler results into plain text for adapter delivery.
+
+        The gateway runner may return an agent-style dict
+        (``final_response``, ``already_sent``, ``failed``), while adapter send
+        paths still operate on plain strings. Normalize both shapes here.
+        """
+        if response is None:
+            return None
+
+        if isinstance(response, dict):
+            if response.get("already_sent") and not response.get("failed"):
+                return None
+
+            final_response = response.get("final_response")
+            if not final_response and response.get("error"):
+                final_response = f"Error: {response['error']}"
+
+            if final_response is None:
+                return None
+            return final_response if isinstance(final_response, str) else str(final_response)
+
+        return response if isinstance(response, str) else str(response)
 
     def set_busy_session_handler(self, handler: Optional[Callable[[MessageEvent, str], Awaitable[bool]]]) -> None:
         """Set an optional handler for messages arriving during active sessions."""
@@ -1875,7 +1901,9 @@ class BasePlatformAdapter(ABC):
         thread_meta = {"thread_id": event.source.thread_id} if event.source.thread_id else None
 
         try:
-            response = await self._message_handler(event)
+            response = self._normalize_handler_response(
+                await self._message_handler(event)
+            )
             # Old adapter task (if any) is cancelled AFTER the runner has
             # fully handled the command — keeps ordering deterministic.
             await self.cancel_session_processing(
@@ -1966,7 +1994,9 @@ class BasePlatformAdapter(ABC):
                 )
                 try:
                     _thread_meta = {"thread_id": event.source.thread_id} if event.source.thread_id else None
-                    response = await self._message_handler(event)
+                    response = self._normalize_handler_response(
+                        await self._message_handler(event)
+                    )
                     if response:
                         await self._send_with_retry(
                             chat_id=event.source.chat_id,
@@ -2069,7 +2099,9 @@ class BasePlatformAdapter(ABC):
             await self._run_processing_hook("on_processing_start", event)
 
             # Call the handler (this can take a while with tool calls)
-            response = await self._message_handler(event)
+            response = self._normalize_handler_response(
+                await self._message_handler(event)
+            )
             
             # Send response if any.  A None/empty response is normal when
             # streaming already delivered the text (already_sent=True) or

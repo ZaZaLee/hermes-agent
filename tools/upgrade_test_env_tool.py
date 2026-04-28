@@ -60,7 +60,8 @@ def _create_askpass_helper(password_file: str) -> str:
     )
     try:
         handle.write("#!/bin/sh\n")
-        handle.write(f"exec cat {shlex.quote(password_file)}\n")
+        handle.write(f"IFS= read -r password < {shlex.quote(password_file)} || exit 1\n")
+        handle.write("printf '%s\\n' \"$password\"\n")
         handle.close()
         os.chmod(handle.name, 0o700)
     except Exception:
@@ -97,7 +98,11 @@ def _build_ssh_invocation(
         "-o",
         "NumberOfPasswordPrompts=1",
         "-o",
+        "PasswordAuthentication=yes",
+        "-o",
         "PreferredAuthentications=password,keyboard-interactive",
+        "-o",
+        "KbdInteractiveAuthentication=yes",
         "-o",
         "PubkeyAuthentication=no",
         f"{ssh_user}@{host}",

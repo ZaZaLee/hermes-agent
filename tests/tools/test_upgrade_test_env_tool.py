@@ -224,3 +224,49 @@ def test_upgrade_tool_falls_back_to_askpass_when_sshpass_missing(monkeypatch, tm
     assert first_env["SSH_ASKPASS_REQUIRE"] == "force"
     assert os.path.basename(first_env["SSH_ASKPASS"]).startswith("hermes-ssh-askpass-")
     assert first_stdin is subprocess.DEVNULL
+
+
+def test_upgrade_tool_askpass_helper_reads_only_first_line(monkeypatch, tmp_path):
+    password_file = tmp_path / "loginTestEnv.conf"
+    password_file.write_text("secret\nignored\n", encoding="utf-8")
+    monkeypatch.setenv("TEST_ENV_UPGRADE_ALLOWED_USERS", "ou_ops")
+    monkeypatch.setenv("TEST_ENV_UPGRADE_PASSWORD_FILE", str(password_file))
+
+    helper_paths = []
+
+    def fake_run(argv, capture_output, text, timeout, check, env=None, stdin=None):
+        del argv, capture_output, text, timeout, check, stdin
+        helper_path = env["SSH_ASKPASS"]
+        helper_paths.append(helper_path)
+        output = subprocess.run(
+            [helper_path],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert output.stdout == "secret\n"
+        return SimpleNamespace(returncode=0, stdout="ok\n", stderr="")
+
+    def fake_which(name):
+        mapping = {
+            "ssh": "/usr/bin/ssh",
+            "setsid": "/usr/bin/setsid",
+        }
+        return mapping.get(name)
+
+    tokens = set_session_vars(
+        platform="feishu",
+        user_id="ou_ops",
+        message_text="升级测试环境客户端",
+    )
+    try:
+        monkeypatch.setattr("tools.upgrade_test_env_tool.subprocess.run", fake_run)
+        monkeypatch.setattr("tools.upgrade_test_env_tool.shutil.which", fake_which)
+        result = json.loads(upgrade_test_env_client())
+    finally:
+        clear_session_vars(tokens)
+
+    assert result["success"] is True
+    assert helper_paths
+    for helper_path in helper_paths:
+        assert not os.path.exists(helper_path)

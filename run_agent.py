@@ -45,6 +45,39 @@ from pathlib import Path
 
 from hermes_constants import get_hermes_home
 
+_MEMORY_WRITE_RECALL_HINTS = (
+    "我是谁",
+    "你记得",
+    "还记得",
+    "认识我",
+    "我的代号是什么",
+    "我的名字是什么",
+    "我的昵称是什么",
+    "该怎么称呼我",
+)
+
+_MEMORY_WRITE_INTENT_PATTERNS = (
+    re.compile(r"^(?:请)?记住[，,:：]?(?:我(?:的)?(?:代号|花名|名字|昵称|称呼|英文名)是|叫我|我是)"),
+    re.compile(r"^(?:以后)?(?:还是)?叫我[^\n，。！？!?；;]{1,40}$"),
+    re.compile(r"^我(?:的)?(?:代号|花名|名字|昵称|称呼|英文名)是[^\n，。！？!?；;]{1,80}$"),
+    re.compile(r"^我叫[^\n，。！？!?；;]{1,40}$"),
+    re.compile(r"^(?:please\s+)?remember(?:\s+that)?\s+(?:my\s+name\s+is|call\s+me)\b", re.IGNORECASE),
+    re.compile(r"^call\s+me\b", re.IGNORECASE),
+    re.compile(r"^my\s+name\s+is\b", re.IGNORECASE),
+)
+
+
+def _looks_like_memory_write_request(text: Any) -> bool:
+    """Heuristic for explicit user attempts to set persistent memory."""
+    if not isinstance(text, str):
+        return False
+    normalized = re.sub(r"\s+", "", text.strip())
+    if not normalized:
+        return False
+    if any(hint in normalized for hint in _MEMORY_WRITE_RECALL_HINTS):
+        return False
+    return any(pattern.search(normalized) for pattern in _MEMORY_WRITE_INTENT_PATTERNS)
+
 # Load .env from ~/.hermes/.env first, then project root as dev fallback.
 # User-managed env files should override stale shell exports on restart.
 from hermes_cli.env_loader import load_hermes_dotenv
@@ -2386,6 +2419,20 @@ class AIAgent:
                 ),
             },
             ensure_ascii=False,
+        )
+
+    def _memory_write_denied_response_text(self) -> str:
+        """User-visible reply when a gateway user is not allowed to set memory."""
+        return (
+            "Persistent memory updates are restricted to configured gateway admins for this chat. "
+            "I can still answer normally, but I will not save that as memory."
+        )
+
+    def _should_block_non_admin_memory_request(self, user_message: Any) -> bool:
+        """Return True when a gateway turn should be rejected before the model runs."""
+        return (
+            not self._is_memory_write_authorized()
+            and _looks_like_memory_write_request(user_message)
         )
 
     def _handle_memory_tool_call(self, function_args: dict) -> str:
@@ -8883,7 +8930,49 @@ class AIAgent:
         messages.append(user_msg)
         current_turn_user_idx = len(messages) - 1
         self._persist_user_message_idx = current_turn_user_idx
-        
+
+        if self._should_block_non_admin_memory_request(original_user_message):
+            final_response = self._memory_write_denied_response_text()
+            logger.info(
+                "Blocked non-admin memory-style user message user_id=%s platform=%s session_id=%s msg=%r",
+                self._user_id or "",
+                self.platform or "",
+                self.session_id or "",
+                _summarize_user_message_for_log(original_user_message),
+            )
+            messages.append({"role": "assistant", "content": final_response})
+            self._save_trajectory(messages, _summarize_user_message_for_log(user_message), True)
+            self._cleanup_task_resources(effective_task_id)
+            self._persist_session(messages, conversation_history)
+            self._stream_callback = None
+            self.clear_interrupt()
+            self._response_was_previewed = False
+            return {
+                "final_response": final_response,
+                "last_reasoning": None,
+                "messages": messages,
+                "api_calls": 0,
+                "completed": True,
+                "partial": False,
+                "interrupted": False,
+                "response_previewed": False,
+                "model": self.model,
+                "provider": self.provider,
+                "base_url": self.base_url,
+                "input_tokens": self.session_input_tokens,
+                "output_tokens": self.session_output_tokens,
+                "cache_read_tokens": self.session_cache_read_tokens,
+                "cache_write_tokens": self.session_cache_write_tokens,
+                "reasoning_tokens": self.session_reasoning_tokens,
+                "prompt_tokens": self.session_prompt_tokens,
+                "completion_tokens": self.session_completion_tokens,
+                "total_tokens": self.session_total_tokens,
+                "last_prompt_tokens": getattr(self.context_compressor, "last_prompt_tokens", 0) or 0,
+                "estimated_cost_usd": self.session_estimated_cost_usd,
+                "cost_status": self.session_cost_status,
+                "cost_source": self.session_cost_source,
+            }
+
         if not self.quiet_mode:
             _print_preview = _summarize_user_message_for_log(user_message)
             self._safe_print(f"💬 Starting conversation: '{_print_preview[:60]}{'...' if len(_print_preview) > 60 else ''}'")
@@ -11999,6 +12088,13 @@ class AIAgent:
             try:
                 if self._is_memory_write_authorized():
                     self._memory_manager.sync_all(original_user_message, final_response)
+                elif _looks_like_memory_write_request(original_user_message):
+                    logger.info(
+                        "Skipped external memory sync for non-admin user_id=%s platform=%s session_id=%s",
+                        self._user_id or "",
+                        self.platform or "",
+                        self.session_id or "",
+                    )
                 self._memory_manager.queue_prefetch_all(original_user_message)
             except Exception:
                 pass

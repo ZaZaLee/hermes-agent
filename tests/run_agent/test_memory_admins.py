@@ -136,3 +136,30 @@ def test_non_admin_session_end_skips_provider_extraction(monkeypatch):
 
     agent._memory_manager.on_session_end.assert_not_called()
     agent._memory_manager.shutdown_all.assert_called_once()
+
+
+def test_memory_write_intent_helper_matches_explicit_identity_updates():
+    assert run_agent._looks_like_memory_write_request("记住，我的代号是二哥") is True
+    assert run_agent._looks_like_memory_write_request("叫我老王") is True
+    assert run_agent._looks_like_memory_write_request("我是谁？") is False
+
+
+def test_non_admin_memory_style_turn_is_rejected_before_model_call(monkeypatch):
+    monkeypatch.setenv("FEISHU_MEMORY_ADMIN_USERS", "ou_admin")
+    monkeypatch.delenv("GATEWAY_MEMORY_ADMIN_USERS", raising=False)
+    agent = _make_agent(user_id="ou_guest")
+
+    with (
+        patch.object(agent, "_persist_session") as persist_session,
+        patch.object(agent, "_cleanup_task_resources") as cleanup_task_resources,
+        patch.object(agent, "_save_trajectory") as save_trajectory,
+    ):
+        result = agent.run_conversation("记住，我的代号是二哥")
+
+    assert "restricted to configured gateway admins" in result["final_response"]
+    assert result["api_calls"] == 0
+    assert result["messages"][-1]["role"] == "assistant"
+    assert agent.client.chat.completions.create.called is False
+    persist_session.assert_called_once()
+    cleanup_task_resources.assert_called_once()
+    save_trajectory.assert_called_once()

@@ -8266,6 +8266,9 @@ class GatewayRunner:
             return "\n\n".join(parts)
 
         parts = [result.get("summary") or "Protected test-environment client upgrade completed successfully."]
+        target_dir = result.get("target_dir")
+        if target_dir:
+            parts.append(f"target directory: {target_dir}")
         step1 = result.get("step1")
         step2 = result.get("step2")
         if isinstance(step1, dict):

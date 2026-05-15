@@ -34,6 +34,7 @@ _DEFAULT_TEST_ENV_UPGRADE_STEP1 = "/opt/sh/upgrade_frontend_step1.sh"
 _DEFAULT_TEST_ENV_UPGRADE_STEP2 = "/opt/sh/upgrade_frontend_step2.sh"
 _DEFAULT_TEST_ENV_UPGRADE_TIMEOUT = 900
 _DEFAULT_TEST_ENV_UPGRADE_PLATFORMS = frozenset({"feishu"})
+_TEST_ENV_UPGRADE_TARGET_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
 @dataclass(frozen=True)
@@ -184,33 +185,28 @@ def current_upgrade_request_is_authorized(
             f"Protected operation denied for user_id '{user_id}'.",
         )
 
-    current_message = get_session_env("HERMES_SESSION_MESSAGE_TEXT", "")
-    observed_text = normalize_trigger_text(
-        current_message,
-        strip_invisible=cfg.strip_invisible,
-        collapse_whitespace=cfg.collapse_whitespace,
-        strip_feishu_mention_hint=cfg.strip_feishu_mention_hint,
-    )
-    expected_text = normalize_trigger_text(
-        cfg.trigger,
-        strip_invisible=cfg.strip_invisible,
-        collapse_whitespace=cfg.collapse_whitespace,
-        strip_feishu_mention_hint=False,
-    )
-    if observed_text != expected_text:
+    matched, _target, target_error = parse_test_env_upgrade_request(cfg)
+    if not matched:
         return (
             False,
             "Protected operation denied: inbound message did not exactly match "
-            f"the configured trigger '{cfg.trigger}'.",
+            f"the configured trigger '{cfg.trigger}' or trigger plus a target directory.",
         )
+    if target_error:
+        return False, target_error
 
     return True, ""
 
 
-def current_message_requests_test_env_upgrade(
+def parse_test_env_upgrade_request(
     cfg: TestEnvUpgradeConfig | None = None,
-) -> bool:
-    """Return True when the inbound gateway message exactly matches the trigger."""
+) -> tuple[bool, str | None, str]:
+    """Parse the current gateway message into a protected upgrade request.
+
+    Returns ``(matched, target_dir, error)``. ``target_dir`` is ``None`` when
+    the plain trigger was used and both upgrade scripts should run without an
+    argument.
+    """
     cfg = cfg or load_test_env_upgrade_config()
     current_message = get_session_env("HERMES_SESSION_MESSAGE_TEXT", "")
     observed_text = normalize_trigger_text(
@@ -225,7 +221,36 @@ def current_message_requests_test_env_upgrade(
         collapse_whitespace=cfg.collapse_whitespace,
         strip_feishu_mention_hint=False,
     )
-    return bool(observed_text) and observed_text == expected_text
+    if not observed_text or not observed_text.startswith(expected_text):
+        return False, None, ""
+
+    target_dir = observed_text[len(expected_text):]
+    if not target_dir:
+        return True, None, ""
+    if not _TEST_ENV_UPGRADE_TARGET_RE.fullmatch(target_dir):
+        return (
+            True,
+            None,
+            "Invalid test-environment upgrade target directory. Use only "
+            "letters, numbers, '.', '_' or '-'.",
+        )
+    return True, target_dir, ""
+
+
+def current_message_requests_test_env_upgrade(
+    cfg: TestEnvUpgradeConfig | None = None,
+) -> bool:
+    """Return True when the inbound gateway message starts with the trigger."""
+    matched, _target, _error = parse_test_env_upgrade_request(cfg)
+    return matched
+
+
+def current_test_env_upgrade_target(
+    cfg: TestEnvUpgradeConfig | None = None,
+) -> str | None:
+    """Return the optional target directory from the current upgrade request."""
+    _matched, target_dir, _error = parse_test_env_upgrade_request(cfg)
+    return target_dir
 
 
 def protected_upgrade_terminal_block_message(

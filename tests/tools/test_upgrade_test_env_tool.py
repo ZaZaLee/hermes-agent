@@ -6,6 +6,7 @@ from unittest.mock import MagicMock
 
 from gateway.session_context import clear_session_vars, set_session_vars
 from tools.protected_ops import (
+    current_test_env_upgrade_target,
     current_message_requests_test_env_upgrade,
     current_upgrade_request_is_authorized,
     protected_upgrade_terminal_block_message,
@@ -45,6 +46,46 @@ def test_trigger_match_detects_exact_trigger_after_mention_hint(monkeypatch):
         clear_session_vars(tokens)
 
     assert matched is True
+
+
+def test_trigger_match_accepts_target_directory_suffix(monkeypatch):
+    monkeypatch.setenv("TEST_ENV_UPGRADE_ALLOWED_USERS", "ou_allowed")
+
+    tokens = set_session_vars(
+        platform="feishu",
+        user_id="ou_allowed",
+        message_text="升级测试环境客户端ZumaAdventure",
+    )
+    try:
+        matched = current_message_requests_test_env_upgrade()
+        target_dir = current_test_env_upgrade_target()
+        authorized, reason = current_upgrade_request_is_authorized()
+    finally:
+        clear_session_vars(tokens)
+
+    assert matched is True
+    assert target_dir == "ZumaAdventure"
+    assert authorized is True
+    assert reason == ""
+
+
+def test_authorization_rejects_unsafe_target_directory_suffix(monkeypatch):
+    monkeypatch.setenv("TEST_ENV_UPGRADE_ALLOWED_USERS", "ou_allowed")
+
+    tokens = set_session_vars(
+        platform="feishu",
+        user_id="ou_allowed",
+        message_text="升级测试环境客户端Zuma;rm",
+    )
+    try:
+        matched = current_message_requests_test_env_upgrade()
+        authorized, reason = current_upgrade_request_is_authorized()
+    finally:
+        clear_session_vars(tokens)
+
+    assert matched is True
+    assert authorized is False
+    assert "Invalid test-environment upgrade target directory" in reason
 
 
 def test_authorization_rejects_unauthorized_user(monkeypatch):
@@ -181,6 +222,48 @@ def test_upgrade_tool_runs_step1_then_step2_and_audits(monkeypatch, tmp_path):
     last_entry = json.loads(audit_lines[-1])
     assert last_entry["status"] == "completed"
     assert last_entry["user_id"] == "ou_ops"
+
+
+def test_upgrade_tool_passes_target_directory_to_both_steps(monkeypatch, tmp_path):
+    password_file = tmp_path / "loginTestEnv.conf"
+    password_file.write_text("secret\n", encoding="utf-8")
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / ".hermes"))
+    monkeypatch.setenv("TEST_ENV_UPGRADE_ALLOWED_USERS", "ou_ops")
+    monkeypatch.setenv("TEST_ENV_UPGRADE_PASSWORD_FILE", str(password_file))
+
+    remote_commands = []
+
+    def fake_run(argv, capture_output, text, timeout, check, env=None, stdin=None):
+        del capture_output, text, timeout, check, env, stdin
+        remote_commands.append(argv[-1])
+        return SimpleNamespace(returncode=0, stdout="ok\n", stderr="")
+
+    monkeypatch.setattr("tools.upgrade_test_env_tool.subprocess.run", fake_run)
+    monkeypatch.setattr(
+        "tools.upgrade_test_env_tool.shutil.which",
+        lambda name: f"/usr/bin/{name}",
+    )
+
+    tokens = set_session_vars(
+        platform="feishu",
+        user_id="ou_ops",
+        message_text="升级测试环境客户端Zuma",
+    )
+    try:
+        result = json.loads(upgrade_test_env_client())
+    finally:
+        clear_session_vars(tokens)
+
+    assert result["success"] is True
+    assert result["target_dir"] == "Zuma"
+    assert remote_commands == [
+        "bash -lc '/opt/sh/upgrade_frontend_step1.sh Zuma'",
+        "bash -lc '/opt/sh/upgrade_frontend_step2.sh Zuma'",
+    ]
+
+    audit_path = tmp_path / ".hermes" / "protected_ops_audit.jsonl"
+    last_entry = json.loads(audit_path.read_text(encoding="utf-8").strip().splitlines()[-1])
+    assert last_entry["details"]["target_dir"] == "Zuma"
 
 
 def test_upgrade_tool_falls_back_to_askpass_when_sshpass_missing(monkeypatch, tmp_path):

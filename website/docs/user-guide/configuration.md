@@ -1199,7 +1199,7 @@ TEST_ENV_UPGRADE_TIMEOUT_SECONDS=900
 Behavior:
 
 - The agent still receives the message normally, so the turn is preserved in transcript/history
-- The protected tool checks both the sender `user_id` and the exact inbound trigger phrase in code
+- The protected tool checks both the sender `user_id` and the inbound trigger phrase in code. The plain trigger runs the configured scripts without arguments; appending a simple target directory, such as `升级测试环境客户端Zuma`, runs each script with that directory as its single argument.
 - Raw `terminal()` access to the protected host / scripts is blocked, so the model cannot bypass the tool path
 - Every attempt is audit-logged under `HERMES_HOME/protected_ops_audit.jsonl`
 

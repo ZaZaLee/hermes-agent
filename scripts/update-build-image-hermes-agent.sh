@@ -22,6 +22,7 @@ HARBOR_PASSWORD="${HARBOR_PASSWORD:-tG8dS1mP6yA0tB9x}"
 HARBOR_PROJECT="${HARBOR_PROJECT:-ai}"
 IMAGE_REPOSITORY="${IMAGE_REPOSITORY:-hermes-agent}"
 TAG="${TAG:-ai-sig}"
+HARBOR_LOGIN_TARGET="${HARBOR_LOGIN_TARGET:-${HARBOR_URL}}"
 
 CONTAINERD_SOCK="${CONTAINERD_SOCK:-unix:///run/k3s/containerd/containerd.sock}"
 CONTAINERD_NAMESPACE="${CONTAINERD_NAMESPACE:-k8s.io}"
@@ -32,6 +33,7 @@ FORCE="${FORCE:-0}"
 CLEAN_UNTRACKED="${CLEAN_UNTRACKED:-0}"
 PULL_BASE_IMAGES="${PULL_BASE_IMAGES:-0}"
 PUSH_IMAGE="${PUSH_IMAGE:-1}"
+SKIP_BUILD="${SKIP_BUILD:-0}"
 UPDATE_K8S="${UPDATE_K8S:-1}"
 KUBE_NAMESPACE="${KUBE_NAMESPACE:-ai}"
 KUBE_DEPLOYMENT="${KUBE_DEPLOYMENT:-hermes-agent}"
@@ -41,6 +43,10 @@ PRUNE_OLD_IMAGES="${PRUNE_OLD_IMAGES:-0}"
 
 # Build args used by Dockerfile.ghcr. They are harmlessly omitted when another
 # Dockerfile is selected.
+APP_FROM_HARBOR_BASE="${APP_FROM_HARBOR_BASE:-0}"
+HARBOR_BASE_REPO="${HARBOR_BASE_REPO:-hermes-base}"
+HARBOR_BASE_TAG="${HARBOR_BASE_TAG:-base-20260425-v1}"
+HARBOR_BASE_IMAGE="${HARBOR_BASE_IMAGE:-${HARBOR_REGISTRY}/${HARBOR_PROJECT}/${HARBOR_BASE_REPO}:${HARBOR_BASE_TAG}}"
 INSTALL_BROWSER="${INSTALL_BROWSER:-1}"
 PREINSTALLED_PLAYWRIGHT="${PREINSTALLED_PLAYWRIGHT:-0}"
 PLAYWRIGHT_BROWSERS_PATH_ARG="${PLAYWRIGHT_BROWSERS_PATH_ARG:-/opt/hermes/.playwright}"
@@ -54,6 +60,9 @@ PIP_INDEX_URL="${PIP_INDEX_URL:-}"
 UV_INDEX_URL="${UV_INDEX_URL:-}"
 PLAYWRIGHT_DOWNLOAD_HOST="${PLAYWRIGHT_DOWNLOAD_HOST:-}"
 BASE_IMAGE="${BASE_IMAGE:-}"
+TMP_APP_DOCKERFILE=""
+
+trap 'rm -f "${TMP_APP_DOCKERFILE:-}"' EXIT
 
 log() {
   printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"
@@ -133,7 +142,7 @@ prepare_repo() {
 }
 
 login_harbor() {
-  if [ "$PUSH_IMAGE" != "1" ]; then
+  if [ "$PUSH_IMAGE" != "1" ] && [ "$APP_FROM_HARBOR_BASE" != "1" ]; then
     return
   fi
 
@@ -141,8 +150,43 @@ login_harbor() {
   [ -n "$HARBOR_PASSWORD" ] || fail "HARBOR_PASSWORD is empty"
 
   unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY
-  log "logging in to Harbor: $HARBOR_URL"
-  "${CONTAINER_CMD[@]}" login -u "$HARBOR_USERNAME" -p "$HARBOR_PASSWORD" "$HARBOR_REGISTRY"
+  log "logging in to Harbor: $HARBOR_LOGIN_TARGET"
+  printf '%s\n' "$HARBOR_PASSWORD" | "${CONTAINER_CMD[@]}" login \
+    --username "$HARBOR_USERNAME" \
+    --password-stdin \
+    "$HARBOR_LOGIN_TARGET"
+}
+
+prepare_app_dockerfile_from_base() {
+  [ "$DOCKERFILE" = "Dockerfile.ghcr" ] ||
+    fail "APP_FROM_HARBOR_BASE=1 currently requires DOCKERFILE=Dockerfile.ghcr"
+
+  TMP_APP_DOCKERFILE="$(mktemp "${TMPDIR:-/tmp}/Dockerfile.hermes-agent.app.XXXXXX")"
+
+  cat > "$TMP_APP_DOCKERFILE" <<EOF
+ARG BASE_IMAGE=${HARBOR_BASE_IMAGE}
+FROM \${BASE_IMAGE}
+
+ARG INSTALL_BROWSER=1
+ARG PREINSTALLED_PLAYWRIGHT=1
+ARG PLAYWRIGHT_BROWSERS_PATH_ARG=/opt/hermes/.playwright
+ARG PLAYWRIGHT_ONLY_SHELL=1
+ARG INSTALL_WHATSAPP_BRIDGE=0
+ARG NPM_REGISTRY=https://registry.npmjs.org
+ARG PIP_INDEX_URL=
+ARG UV_INDEX_URL=
+ARG PLAYWRIGHT_DOWNLOAD_HOST=
+
+ENV PLAYWRIGHT_BROWSERS_PATH=\${PLAYWRIGHT_BROWSERS_PATH_ARG}
+EOF
+
+  awk '
+    found { print }
+    /^COPY \. \/opt\/hermes$/ { found = 1; print }
+  ' "$DOCKERFILE" >> "$TMP_APP_DOCKERFILE"
+
+  grep -q '^COPY \. /opt/hermes$' "$TMP_APP_DOCKERFILE" ||
+    fail "failed to generate app Dockerfile from $DOCKERFILE"
 }
 
 build_image() {
@@ -150,13 +194,28 @@ build_image() {
 
   COMMIT="$(git rev-parse --short HEAD)"
   FULL_IMAGE_NAME="${HARBOR_REGISTRY}/${HARBOR_PROJECT}/${IMAGE_REPOSITORY}:${TAG}"
+  local dockerfile_path="$DOCKERFILE"
 
   log "building container image"
   log "image: $FULL_IMAGE_NAME"
   log "dockerfile: $DOCKERFILE"
   log "commit: $COMMIT"
 
-  build_flags=(-t "$FULL_IMAGE_NAME" -f "$DOCKERFILE")
+  if [ "$SKIP_BUILD" = "1" ]; then
+    log "SKIP_BUILD=1: using existing local image"
+    return
+  fi
+
+  if [ "$APP_FROM_HARBOR_BASE" = "1" ]; then
+    log "building app image from Harbor base: $HARBOR_BASE_IMAGE"
+    "${CONTAINER_CMD[@]}" pull "$HARBOR_BASE_IMAGE"
+    prepare_app_dockerfile_from_base
+    dockerfile_path="$TMP_APP_DOCKERFILE"
+    BASE_IMAGE="$HARBOR_BASE_IMAGE"
+    PREINSTALLED_PLAYWRIGHT=1
+  fi
+
+  build_flags=(-t "$FULL_IMAGE_NAME" -f "$dockerfile_path")
   if [ "$PULL_BASE_IMAGES" = "1" ]; then
     build_flags+=(--pull)
   fi
@@ -193,11 +252,14 @@ push_image() {
   log "pushing image: $FULL_IMAGE_NAME"
   if ! "${CONTAINER_CMD[@]}" push "$FULL_IMAGE_NAME"; then
     log "push failed; retrying after Harbor login"
-    "${CONTAINER_CMD[@]}" login -u "$HARBOR_USERNAME" -p "$HARBOR_PASSWORD" "$HARBOR_REGISTRY"
+    printf '%s\n' "$HARBOR_PASSWORD" | "${CONTAINER_CMD[@]}" login \
+      --username "$HARBOR_USERNAME" \
+      --password-stdin \
+      "$HARBOR_LOGIN_TARGET"
     "${CONTAINER_CMD[@]}" push "$FULL_IMAGE_NAME"
   fi
 
-  "${CONTAINER_CMD[@]}" logout "$HARBOR_REGISTRY" >/dev/null 2>&1 || true
+  "${CONTAINER_CMD[@]}" logout "$HARBOR_LOGIN_TARGET" >/dev/null 2>&1 || true
 }
 
 update_k8s() {

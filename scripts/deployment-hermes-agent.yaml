@@ -1,0 +1,103 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ai
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: harbor-registry
+  namespace: ai
+type: kubernetes.io/dockerconfigjson
+stringData:
+  .dockerconfigjson: |
+    {"auths":{"sig-harbor.vancygame.com":{"username":"admin","password":"tG8dS1mP6yA0tB9x","auth":"YWRtaW46dEc4ZFMxbVA2eUEwdEI5eA=="}}}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: hermes-agent-env
+  namespace: ai
+type: Opaque
+stringData:
+  # Configure at least one messaging platform before expecting the gateway to
+  # process messages, for example TELEGRAM_BOT_TOKEN and TELEGRAM_ALLOWED_USERS.
+  OPENROUTER_API_KEY: ""
+  TELEGRAM_BOT_TOKEN: ""
+  TELEGRAM_ALLOWED_USERS: ""
+  TELEGRAM_HOME_CHANNEL: ""
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: hermes-agent-config
+  namespace: ai
+data:
+  TZ: Asia/Shanghai
+  HERMES_HOME: /opt/data
+  HERMES_ACCEPT_HOOKS: "1"
+  PYTHONUNBUFFERED: "1"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hermes-agent
+  namespace: ai
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: hermes-agent
+  template:
+    metadata:
+      labels:
+        app: hermes-agent
+    spec:
+      imagePullSecrets:
+        - name: harbor-registry
+      containers:
+        - name: hermes-agent
+          image: sig-harbor.vancygame.com/ai/hermes-agent:ai-sig
+          imagePullPolicy: Always
+          args:
+            - gateway
+            - run
+            - --replace
+          envFrom:
+            - configMapRef:
+                name: hermes-agent-config
+            - secretRef:
+                name: hermes-agent-env
+          volumeMounts:
+            - name: data
+              mountPath: /opt/data
+          readinessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - test -f /opt/data/gateway.pid
+            initialDelaySeconds: 20
+            periodSeconds: 15
+            timeoutSeconds: 5
+          livenessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - test -f /opt/data/gateway.pid && kill -0 "$(cat /opt/data/gateway.pid)"
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            timeoutSeconds: 5
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1Gi
+            limits:
+              cpu: "2"
+              memory: 4Gi
+      volumes:
+        - name: data
+          hostPath:
+            path: /opt/AI/hermes-agent
+            type: DirectoryOrCreate

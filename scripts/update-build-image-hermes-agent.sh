@@ -77,6 +77,24 @@ require_cmd() {
   command -v "$1" >/dev/null 2>&1 || fail "missing required command: $1"
 }
 
+image_exists() {
+  if [ "$CONTAINER_TYPE" = "nerdctl" ]; then
+    "${CONTAINER_CMD[@]}" images --quiet "$FULL_IMAGE_NAME" 2>/dev/null | grep -q .
+    return
+  fi
+
+  "${CONTAINER_CMD[@]}" image inspect "$FULL_IMAGE_NAME" >/dev/null 2>&1
+}
+
+show_local_image_hint() {
+  log "local image not found in ${CONTAINER_TYPE} namespace ${CONTAINERD_NAMESPACE}: $FULL_IMAGE_NAME"
+  if [ "$CONTAINER_TYPE" = "nerdctl" ]; then
+    "${CONTAINER_CMD[@]}" images | grep -E "(${IMAGE_REPOSITORY}|REPOSITORY)" || true
+  else
+    "${CONTAINER_CMD[@]}" images | grep -E "(${IMAGE_REPOSITORY}|REPOSITORY)" || true
+  fi
+}
+
 detect_container_tool() {
   if command -v nerdctl >/dev/null 2>&1; then
     CONTAINER_CMD=(nerdctl --address "${CONTAINERD_SOCK}" --namespace "${CONTAINERD_NAMESPACE}" --insecure-registry)
@@ -203,6 +221,10 @@ build_image() {
 
   if [ "$SKIP_BUILD" = "1" ]; then
     log "SKIP_BUILD=1: using existing local image"
+    image_exists || {
+      show_local_image_hint
+      fail "local image is missing; rerun without SKIP_BUILD=1 or rebuild in the same ${CONTAINER_TYPE} namespace"
+    }
     return
   fi
 

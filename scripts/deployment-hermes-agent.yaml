@@ -85,7 +85,19 @@ spec:
               command:
                 - /bin/sh
                 - -c
-                - test -f /opt/data/gateway.pid && kill -0 "$(cat /opt/data/gateway.pid)"
+                - |
+                  pid_file=/opt/data/gateway.pid
+                  test -f "$pid_file" || exit 1
+                  raw="$(cat "$pid_file")"
+                  case "$raw" in
+                    ''|*[!0-9]*)
+                      pid="$(sed -n 's/.*"pid"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$pid_file")"
+                      ;;
+                    *)
+                      pid="$raw"
+                      ;;
+                  esac
+                  test -n "$pid" && kill -0 "$pid"
             initialDelaySeconds: 60
             periodSeconds: 30
             timeoutSeconds: 5

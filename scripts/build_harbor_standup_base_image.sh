@@ -18,26 +18,83 @@ PLAYWRIGHT_BROWSERS_PATH_ARG="${PLAYWRIGHT_BROWSERS_PATH_ARG:-/opt/hermes/.playw
 PLAYWRIGHT_DOWNLOAD_HOST="${PLAYWRIGHT_DOWNLOAD_HOST:-}"
 CONTAINERD_SOCK="${CONTAINERD_SOCK:-unix:///run/k3s/containerd/containerd.sock}"
 CONTAINERD_NAMESPACE="${CONTAINERD_NAMESPACE:-ai}"
+CONTAINER_TOOL="${CONTAINER_TOOL:-auto}"
 
 BASE_IMAGE="${HARBOR_REGISTRY}/${HARBOR_PROJECT}/${HARBOR_BASE_REPO}:${HARBOR_BASE_TAG}"
 RAW_BASE_IMAGE="${HARBOR_REGISTRY}/${HARBOR_PROJECT}/${HARBOR_RAW_BASE_REPO}:${HARBOR_BASE_TAG}"
 
+container_tool_available() {
+  command -v "$1" >/dev/null 2>&1
+}
+
+use_nerdctl() {
+  CONTAINER_CMD=(nerdctl --address "${CONTAINERD_SOCK}" --namespace "${CONTAINERD_NAMESPACE}" --insecure-registry)
+  CONTAINER_TYPE="nerdctl"
+}
+
+use_docker() {
+  CONTAINER_CMD=(docker)
+  CONTAINER_TYPE="docker"
+}
+
+verify_container_tool() {
+  "${CONTAINER_CMD[@]}" version >/dev/null 2>&1
+}
+
 detect_container_tool() {
-  if command -v nerdctl >/dev/null 2>&1; then
-    CONTAINER_CMD=(nerdctl --address "${CONTAINERD_SOCK}" --namespace "${CONTAINERD_NAMESPACE}" --insecure-registry)
-    CONTAINER_TYPE="nerdctl"
-    echo "Using container tool: nerdctl (${CONTAINERD_NAMESPACE}, ${CONTAINERD_SOCK})"
-    return
+  case "${CONTAINER_TOOL}" in
+    nerdctl)
+      container_tool_available nerdctl || {
+        echo "CONTAINER_TOOL=nerdctl but nerdctl is not available" >&2
+        exit 1
+      }
+      use_nerdctl
+      verify_container_tool || {
+        echo "nerdctl is installed but cannot connect to ${CONTAINERD_SOCK} in namespace ${CONTAINERD_NAMESPACE}" >&2
+        exit 1
+      }
+      echo "Using container tool: nerdctl (${CONTAINERD_NAMESPACE}, ${CONTAINERD_SOCK})"
+      return
+      ;;
+    docker)
+      container_tool_available docker || {
+        echo "CONTAINER_TOOL=docker but docker is not available" >&2
+        exit 1
+      }
+      use_docker
+      verify_container_tool || {
+        echo "docker is installed but not available" >&2
+        exit 1
+      }
+      echo "Using container tool: docker"
+      return
+      ;;
+    auto) ;;
+    *)
+      echo "Unsupported CONTAINER_TOOL=${CONTAINER_TOOL}; use auto, nerdctl, or docker" >&2
+      exit 1
+      ;;
+  esac
+
+  if container_tool_available nerdctl; then
+    use_nerdctl
+    if verify_container_tool; then
+      echo "Using container tool: nerdctl (${CONTAINERD_NAMESPACE}, ${CONTAINERD_SOCK})"
+      return
+    fi
+    echo "Skipping nerdctl: cannot connect to ${CONTAINERD_SOCK} in namespace ${CONTAINERD_NAMESPACE}" >&2
   fi
 
-  if command -v docker >/dev/null 2>&1; then
-    CONTAINER_CMD=(docker)
-    CONTAINER_TYPE="docker"
-    echo "Using container tool: docker"
-    return
+  if container_tool_available docker; then
+    use_docker
+    if verify_container_tool; then
+      echo "Using container tool: docker"
+      return
+    fi
+    echo "Skipping docker: docker is installed but not available" >&2
   fi
 
-  echo "Neither nerdctl nor docker is available" >&2
+  echo "Neither nerdctl nor docker is available or usable" >&2
   exit 1
 }
 

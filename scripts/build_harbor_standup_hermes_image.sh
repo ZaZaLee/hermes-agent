@@ -5,17 +5,10 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SOURCE_DOCKERFILE="${ROOT_DIR}/Dockerfile.ghcr"
 
-echo "Updating source tree in ${ROOT_DIR}"
-(
-  cd "${ROOT_DIR}"
-  git fetch origin
-  git reset --hard origin/main
-)
-
-HARBOR_REGISTRY="${HARBOR_REGISTRY:-127.0.0.1:81}"
-HARBOR_URL="${HARBOR_URL:-http://127.0.0.1:81}"
+HARBOR_REGISTRY="${HARBOR_REGISTRY:-sig-harbor.vancygame.com}"
+HARBOR_URL="${HARBOR_URL:-https://sig-harbor.vancygame.com}"
 HARBOR_USERNAME="${HARBOR_USERNAME:-admin}"
-HARBOR_PASSWORD="${HARBOR_PASSWORD:-fygame#10088}"
+HARBOR_PASSWORD="${HARBOR_PASSWORD:-tG8dS1mP6yA0tB9x}"
 HARBOR_PROJECT="${HARBOR_PROJECT:-ai}"
 HARBOR_BASE_REPO="${HARBOR_BASE_REPO:-hermes-base}"
 HARBOR_BASE_TAG="${HARBOR_BASE_TAG:-base-20260425-v1}"
@@ -23,9 +16,61 @@ HARBOR_APP_REPO="${HARBOR_APP_REPO:-hermes-agent}"
 HARBOR_APP_TAG="${HARBOR_APP_TAG:-app-20260425-v1}"
 LOCAL_APP_IMAGE="${LOCAL_APP_IMAGE:-hermes-agent:local}"
 PUSH_IMAGE="${PUSH_IMAGE:-0}"
+UPDATE_SOURCE="${UPDATE_SOURCE:-1}"
+FORCE_SYNC="${FORCE_SYNC:-0}"
+REMOTE="${REMOTE:-origin}"
+BRANCH="${BRANCH:-main}"
+CONTAINERD_SOCK="${CONTAINERD_SOCK:-unix:///run/k3s/containerd/containerd.sock}"
+CONTAINERD_NAMESPACE="${CONTAINERD_NAMESPACE:-ai}"
 
 BASE_IMAGE="${BASE_IMAGE:-${HARBOR_REGISTRY}/${HARBOR_PROJECT}/${HARBOR_BASE_REPO}:${HARBOR_BASE_TAG}}"
 APP_IMAGE="${APP_IMAGE:-${HARBOR_REGISTRY}/${HARBOR_PROJECT}/${HARBOR_APP_REPO}:${HARBOR_APP_TAG}}"
+
+detect_container_tool() {
+  if command -v nerdctl >/dev/null 2>&1; then
+    CONTAINER_CMD=(nerdctl --address "${CONTAINERD_SOCK}" --namespace "${CONTAINERD_NAMESPACE}" --insecure-registry)
+    CONTAINER_TYPE="nerdctl"
+    echo "Using container tool: nerdctl (${CONTAINERD_NAMESPACE}, ${CONTAINERD_SOCK})"
+    return
+  fi
+
+  if command -v docker >/dev/null 2>&1; then
+    CONTAINER_CMD=(docker)
+    CONTAINER_TYPE="docker"
+    echo "Using container tool: docker"
+    return
+  fi
+
+  echo "Neither nerdctl nor docker is available" >&2
+  exit 1
+}
+
+update_source_tree() {
+  if [[ "${UPDATE_SOURCE}" != "1" ]]; then
+    echo "Skipping source update: UPDATE_SOURCE=${UPDATE_SOURCE}"
+    return
+  fi
+
+  echo "Updating source tree in ${ROOT_DIR}"
+  (
+    cd "${ROOT_DIR}"
+    git fetch "${REMOTE}" "${BRANCH}"
+    if [[ "${FORCE_SYNC}" == "1" ]]; then
+      git checkout "${BRANCH}"
+      git reset --hard "${REMOTE}/${BRANCH}"
+    else
+      git diff --quiet && git diff --cached --quiet || {
+        echo "Tracked files have local changes; commit/stash them first, set UPDATE_SOURCE=0, or set FORCE_SYNC=1" >&2
+        exit 1
+      }
+      git checkout "${BRANCH}"
+      git pull --ff-only "${REMOTE}" "${BRANCH}"
+    fi
+  )
+}
+
+detect_container_tool
+update_source_tree
 
 if [[ ! -f "${SOURCE_DOCKERFILE}" ]]; then
   echo "Dockerfile not found: ${SOURCE_DOCKERFILE}" >&2
@@ -67,12 +112,12 @@ if ! grep -q '^COPY \. /opt/hermes$' "${TMP_DOCKERFILE}"; then
   exit 1
 fi
 
-echo "${HARBOR_PASSWORD}" | docker login "${HARBOR_URL}" \
+echo "${HARBOR_PASSWORD}" | "${CONTAINER_CMD[@]}" login "${HARBOR_URL}" \
   --username "${HARBOR_USERNAME}" \
   --password-stdin
 
 echo "Pulling base image: ${BASE_IMAGE}"
-docker pull "${BASE_IMAGE}"
+"${CONTAINER_CMD[@]}" pull "${BASE_IMAGE}"
 
 BUILD_ARGS=(
   --build-arg "BASE_IMAGE=${BASE_IMAGE}"
@@ -101,7 +146,7 @@ if [[ -n "${LOCAL_APP_IMAGE}" && "${LOCAL_APP_IMAGE}" != "${APP_IMAGE}" ]]; then
   BUILD_TAG_ARGS+=(-t "${LOCAL_APP_IMAGE}")
 fi
 
-docker build \
+"${CONTAINER_CMD[@]}" build \
   -f "${TMP_DOCKERFILE}" \
   "${BUILD_TAG_ARGS[@]}" \
   "${BUILD_ARGS[@]}" \
@@ -109,7 +154,7 @@ docker build \
 
 if [[ "${PUSH_IMAGE}" == "1" ]]; then
   echo "Pushing Hermes image: ${APP_IMAGE}"
-  docker push "${APP_IMAGE}"
+  "${CONTAINER_CMD[@]}" push "${APP_IMAGE}"
 fi
 
 echo "Hermes image ready: ${APP_IMAGE}"

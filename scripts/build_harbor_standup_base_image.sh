@@ -11,6 +11,7 @@ HARBOR_USERNAME="${HARBOR_USERNAME:-admin}"
 HARBOR_PASSWORD="${HARBOR_PASSWORD:-tG8dS1mP6yA0tB9x}"
 HARBOR_PROJECT="${HARBOR_PROJECT:-ai}"
 HARBOR_BASE_REPO="${HARBOR_BASE_REPO:-hermes-base}"
+HARBOR_RAW_BASE_REPO="${HARBOR_RAW_BASE_REPO:-${HARBOR_BASE_REPO}-raw}"
 HARBOR_BASE_TAG="${HARBOR_BASE_TAG:-base-20260425-v1}"
 PLAYWRIGHT_ONLY_SHELL="${PLAYWRIGHT_ONLY_SHELL:-0}"
 PLAYWRIGHT_BROWSERS_PATH_ARG="${PLAYWRIGHT_BROWSERS_PATH_ARG:-/opt/hermes/.playwright}"
@@ -19,7 +20,7 @@ CONTAINERD_SOCK="${CONTAINERD_SOCK:-unix:///run/k3s/containerd/containerd.sock}"
 CONTAINERD_NAMESPACE="${CONTAINERD_NAMESPACE:-ai}"
 
 BASE_IMAGE="${HARBOR_REGISTRY}/${HARBOR_PROJECT}/${HARBOR_BASE_REPO}:${HARBOR_BASE_TAG}"
-LOCAL_RAW_BASE_IMAGE="local/hermes-base-raw:${HARBOR_BASE_TAG}"
+RAW_BASE_IMAGE="${HARBOR_REGISTRY}/${HARBOR_PROJECT}/${HARBOR_RAW_BASE_REPO}:${HARBOR_BASE_TAG}"
 
 detect_container_tool() {
   if command -v nerdctl >/dev/null 2>&1; then
@@ -67,7 +68,7 @@ if [[ ! -s "${TMP_RAW_DOCKERFILE}" ]]; then
 fi
 
 cat > "${TMP_PLAYWRIGHT_DOCKERFILE}" <<EOF
-ARG BASE_IMAGE=${LOCAL_RAW_BASE_IMAGE}
+ARG BASE_IMAGE=${RAW_BASE_IMAGE}
 FROM \${BASE_IMAGE}
 
 ARG PLAYWRIGHT_BROWSERS_PATH_ARG=${PLAYWRIGHT_BROWSERS_PATH_ARG}
@@ -110,12 +111,15 @@ BUILD_ARGS=(
   --build-arg "UV_INDEX_URL=${UV_INDEX_URL:-}"
 )
 
-echo "Building raw base image: ${LOCAL_RAW_BASE_IMAGE}"
+echo "Building raw base image: ${RAW_BASE_IMAGE}"
 "${CONTAINER_CMD[@]}" build \
   -f "${TMP_RAW_DOCKERFILE}" \
-  -t "${LOCAL_RAW_BASE_IMAGE}" \
+  -t "${RAW_BASE_IMAGE}" \
   "${BUILD_ARGS[@]}" \
   "${ROOT_DIR}"
+
+echo "Pushing raw base image: ${RAW_BASE_IMAGE}"
+"${CONTAINER_CMD[@]}" push "${RAW_BASE_IMAGE}"
 
 if [[ "${PLAYWRIGHT_ONLY_SHELL}" == "1" ]]; then
   echo "Adding Playwright Chromium headless shell to base image: ${BASE_IMAGE}"
@@ -125,7 +129,7 @@ fi
 "${CONTAINER_CMD[@]}" build \
   -f "${TMP_PLAYWRIGHT_DOCKERFILE}" \
   -t "${BASE_IMAGE}" \
-  --build-arg "BASE_IMAGE=${LOCAL_RAW_BASE_IMAGE}" \
+  --build-arg "BASE_IMAGE=${RAW_BASE_IMAGE}" \
   --build-arg "PLAYWRIGHT_BROWSERS_PATH_ARG=${PLAYWRIGHT_BROWSERS_PATH_ARG}" \
   --build-arg "PLAYWRIGHT_ONLY_SHELL=${PLAYWRIGHT_ONLY_SHELL}" \
   --build-arg "PLAYWRIGHT_DOWNLOAD_HOST=${PLAYWRIGHT_DOWNLOAD_HOST}" \
@@ -134,11 +138,14 @@ fi
 echo "Pushing base image: ${BASE_IMAGE}"
 "${CONTAINER_CMD[@]}" push "${BASE_IMAGE}"
 
-"${CONTAINER_CMD[@]}" image rm -f "${LOCAL_RAW_BASE_IMAGE}" >/dev/null 2>&1 || true
+"${CONTAINER_CMD[@]}" image rm -f "${RAW_BASE_IMAGE}" >/dev/null 2>&1 || true
 
 cat <<EOF
 Base image ready:
   ${BASE_IMAGE}
+
+Raw base image kept in Harbor for reproducible follow-up builds:
+  ${RAW_BASE_IMAGE}
 
 Use it for app builds with:
   APP_FROM_HARBOR_BASE=1 HARBOR_BASE_IMAGE=${BASE_IMAGE} scripts/update-build-image-hermes-agent.sh

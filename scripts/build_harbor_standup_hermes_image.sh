@@ -13,9 +13,9 @@ HARBOR_PROJECT="${HARBOR_PROJECT:-ai}"
 HARBOR_BASE_REPO="${HARBOR_BASE_REPO:-hermes-base}"
 HARBOR_BASE_TAG="${HARBOR_BASE_TAG:-base-20260425-v1}"
 HARBOR_APP_REPO="${HARBOR_APP_REPO:-hermes-agent}"
-HARBOR_APP_TAG="${HARBOR_APP_TAG:-app-20260425-v1}"
+HARBOR_APP_TAG="${HARBOR_APP_TAG:-ai-sig}"
 LOCAL_APP_IMAGE="${LOCAL_APP_IMAGE:-hermes-agent:local}"
-PUSH_IMAGE="${PUSH_IMAGE:-0}"
+PUSH_IMAGE="${PUSH_IMAGE:-1}"
 UPDATE_SOURCE="${UPDATE_SOURCE:-1}"
 FORCE_SYNC="${FORCE_SYNC:-0}"
 REMOTE="${REMOTE:-origin}"
@@ -44,6 +44,24 @@ use_docker() {
 
 verify_container_tool() {
   "${CONTAINER_CMD[@]}" version >/dev/null 2>&1
+}
+
+require_registry_image() {
+  local image="$1"
+  local image_path="${image%%@*}"
+  local last_component="${image_path##*/}"
+
+  if [[ "${last_component}" == *:* ]]; then
+    image_path="${image_path%:*}"
+  fi
+
+  local registry="${image_path%%/*}"
+
+  if [[ "${image_path}" != */* || ("${registry}" != *.* && "${registry}" != *:* && "${registry}" != "localhost") ]]; then
+    echo "Image must include a real registry host, got: ${image}" >&2
+    echo "Set HARBOR_REGISTRY=sig-harbor.vancygame.com or another registry host." >&2
+    exit 1
+  fi
 }
 
 detect_container_tool() {
@@ -133,6 +151,8 @@ update_source_tree() {
 
 detect_container_tool
 update_source_tree
+require_registry_image "${BASE_IMAGE}"
+require_registry_image "${APP_IMAGE}"
 
 if [[ ! -f "${SOURCE_DOCKERFILE}" ]]; then
   echo "Dockerfile not found: ${SOURCE_DOCKERFILE}" >&2

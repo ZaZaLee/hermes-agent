@@ -41,6 +41,24 @@ verify_container_tool() {
   "${CONTAINER_CMD[@]}" version >/dev/null 2>&1
 }
 
+require_registry_image() {
+  local image="$1"
+  local image_path="${image%%@*}"
+  local last_component="${image_path##*/}"
+
+  if [[ "${last_component}" == *:* ]]; then
+    image_path="${image_path%:*}"
+  fi
+
+  local registry="${image_path%%/*}"
+
+  if [[ "${image_path}" != */* || ("${registry}" != *.* && "${registry}" != *:* && "${registry}" != "localhost") ]]; then
+    echo "Image must include a real registry host, got: ${image}" >&2
+    echo "Set HARBOR_REGISTRY=sig-harbor.vancygame.com or another registry host." >&2
+    exit 1
+  fi
+}
+
 detect_container_tool() {
   case "${CONTAINER_TOOL}" in
     nerdctl)
@@ -104,6 +122,8 @@ if [[ ! -f "${SOURCE_DOCKERFILE}" ]]; then
 fi
 
 detect_container_tool
+require_registry_image "${RAW_BASE_IMAGE}"
+require_registry_image "${BASE_IMAGE}"
 
 if [[ -z "${HARBOR_PASSWORD}" ]]; then
   read -r -s -p "Harbor password for ${HARBOR_USERNAME}: " HARBOR_PASSWORD
@@ -178,6 +198,9 @@ echo "Building raw base image: ${RAW_BASE_IMAGE}"
 echo "Pushing raw base image: ${RAW_BASE_IMAGE}"
 "${CONTAINER_CMD[@]}" push "${RAW_BASE_IMAGE}"
 
+echo "Pulling raw base image for Playwright layer: ${RAW_BASE_IMAGE}"
+"${CONTAINER_CMD[@]}" pull "${RAW_BASE_IMAGE}"
+
 if [[ "${PLAYWRIGHT_ONLY_SHELL}" == "1" ]]; then
   echo "Adding Playwright Chromium headless shell to base image: ${BASE_IMAGE}"
 else
@@ -205,5 +228,5 @@ Raw base image kept in Harbor for reproducible follow-up builds:
   ${RAW_BASE_IMAGE}
 
 Use it for app builds with:
-  APP_FROM_HARBOR_BASE=1 HARBOR_BASE_IMAGE=${BASE_IMAGE} scripts/update-build-image-hermes-agent.sh
+  BASE_IMAGE=${BASE_IMAGE} scripts/build_harbor_standup_hermes_image.sh
 EOF

@@ -14,20 +14,6 @@ stringData:
     {"auths":{"sig-harbor.vancygame.com":{"username":"admin","password":"tG8dS1mP6yA0tB9x","auth":"YWRtaW46dEc4ZFMxbVA2eUEwdEI5eA=="}}}
 ---
 apiVersion: v1
-kind: Secret
-metadata:
-  name: hermes-agent-env
-  namespace: ai
-type: Opaque
-stringData:
-  # Configure at least one messaging platform before expecting the gateway to
-  # process messages, for example TELEGRAM_BOT_TOKEN and TELEGRAM_ALLOWED_USERS.
-  OPENROUTER_API_KEY: ""
-  TELEGRAM_BOT_TOKEN: ""
-  TELEGRAM_ALLOWED_USERS: ""
-  TELEGRAM_HOME_CHANNEL: ""
----
-apiVersion: v1
 kind: ConfigMap
 metadata:
   name: hermes-agent-config

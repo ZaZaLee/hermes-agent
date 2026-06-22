@@ -11,7 +11,6 @@ HARBOR_USERNAME="${HARBOR_USERNAME:-admin}"
 HARBOR_PASSWORD="${HARBOR_PASSWORD:-tG8dS1mP6yA0tB9x}"
 HARBOR_PROJECT="${HARBOR_PROJECT:-ai}"
 HARBOR_BASE_REPO="${HARBOR_BASE_REPO:-hermes-base}"
-HARBOR_RAW_BASE_REPO="${HARBOR_RAW_BASE_REPO:-${HARBOR_BASE_REPO}-raw}"
 HARBOR_BASE_TAG="${HARBOR_BASE_TAG:-base-20260425-v1}"
 PLAYWRIGHT_ONLY_SHELL="${PLAYWRIGHT_ONLY_SHELL:-0}"
 PLAYWRIGHT_BROWSERS_PATH_ARG="${PLAYWRIGHT_BROWSERS_PATH_ARG:-/opt/hermes/.playwright}"
@@ -21,7 +20,7 @@ CONTAINERD_NAMESPACE="${CONTAINERD_NAMESPACE:-ai}"
 CONTAINER_TOOL="${CONTAINER_TOOL:-auto}"
 
 BASE_IMAGE="${HARBOR_REGISTRY}/${HARBOR_PROJECT}/${HARBOR_BASE_REPO}:${HARBOR_BASE_TAG}"
-RAW_BASE_IMAGE="${HARBOR_REGISTRY}/${HARBOR_PROJECT}/${HARBOR_RAW_BASE_REPO}:${HARBOR_BASE_TAG}"
+RAW_BASE_IMAGE="${RAW_BASE_IMAGE:-local/hermes-base-raw:${HARBOR_BASE_TAG}}"
 
 container_tool_available() {
   command -v "$1" >/dev/null 2>&1
@@ -122,7 +121,6 @@ if [[ ! -f "${SOURCE_DOCKERFILE}" ]]; then
 fi
 
 detect_container_tool
-require_registry_image "${RAW_BASE_IMAGE}"
 require_registry_image "${BASE_IMAGE}"
 
 if [[ -z "${HARBOR_PASSWORD}" ]]; then
@@ -195,12 +193,6 @@ echo "Building raw base image: ${RAW_BASE_IMAGE}"
   "${BUILD_ARGS[@]}" \
   "${ROOT_DIR}"
 
-echo "Pushing raw base image: ${RAW_BASE_IMAGE}"
-"${CONTAINER_CMD[@]}" push "${RAW_BASE_IMAGE}"
-
-echo "Pulling raw base image for Playwright layer: ${RAW_BASE_IMAGE}"
-"${CONTAINER_CMD[@]}" pull "${RAW_BASE_IMAGE}"
-
 if [[ "${PLAYWRIGHT_ONLY_SHELL}" == "1" ]]; then
   echo "Adding Playwright Chromium headless shell to base image: ${BASE_IMAGE}"
 else
@@ -224,7 +216,7 @@ cat <<EOF
 Base image ready:
   ${BASE_IMAGE}
 
-Raw base image kept in Harbor for reproducible follow-up builds:
+Local raw base image removed after build:
   ${RAW_BASE_IMAGE}
 
 Use it for app builds with:

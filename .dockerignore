@@ -10,6 +10,17 @@ node_modules
 # CI/CD
 .github
 
+# Non-runtime source trees
+tests/
+website/
+ui-tui/
+datagen-config-examples/
+environments/benchmarks/
+tinker-atropos/
+packaging/
+.plans/
+plans/
+
 # Environment files
 .env
 

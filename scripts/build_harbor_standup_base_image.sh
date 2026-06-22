@@ -228,5 +228,5 @@ Raw base image kept in Harbor for reproducible follow-up builds:
   ${RAW_BASE_IMAGE}
 
 Use it for app builds with:
-  BASE_IMAGE=${BASE_IMAGE} scripts/build_harbor_standup_hermes_image.sh
+  HARBOR_BASE_IMAGE=${BASE_IMAGE} UPDATE_K8S=0 scripts/update-build-image-hermes-agent.sh
 EOF

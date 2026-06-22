@@ -36,6 +36,7 @@ data:
   TZ: Asia/Shanghai
   HERMES_HOME: /opt/data
   HERMES_ACCEPT_HOOKS: "1"
+  TERMINAL_CWD: /workspace/soda
   PYTHONUNBUFFERED: "1"
 ---
 apiVersion: apps/v1
@@ -59,6 +60,7 @@ spec:
         - name: hermes-agent
           image: sig-harbor.vancygame.com/ai/hermes-agent:ai-sig
           imagePullPolicy: Always
+          workingDir: /workspace/soda
           args:
             - gateway
             - run
@@ -71,6 +73,9 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /opt/data
+            - name: soda-src
+              mountPath: /workspace/soda
+              readOnly: false
           readinessProbe:
             exec:
               command:
@@ -113,3 +118,7 @@ spec:
           hostPath:
             path: /opt/AI/hermes-agent
             type: DirectoryOrCreate
+        - name: soda-src
+          hostPath:
+            path: /opt/src/soda
+            type: Directory

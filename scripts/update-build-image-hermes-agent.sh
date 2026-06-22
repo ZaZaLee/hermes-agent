@@ -13,23 +13,28 @@ fi
 REPO_DIR="${REPO_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 REPO_URL="${REPO_URL:-git@github.com:ZaZaLee/hermes-agent.git}"
 REMOTE="${REMOTE:-origin}"
-BRANCH="${BRANCH:-}"
+BRANCH="${BRANCH:-main}"
 
 HARBOR_REGISTRY="${HARBOR_REGISTRY:-sig-harbor.vancygame.com}"
 HARBOR_URL="${HARBOR_URL:-https://sig-harbor.vancygame.com}"
 HARBOR_USERNAME="${HARBOR_USERNAME:-admin}"
 HARBOR_PASSWORD="${HARBOR_PASSWORD:-tG8dS1mP6yA0tB9x}"
 HARBOR_PROJECT="${HARBOR_PROJECT:-ai}"
-IMAGE_REPOSITORY="${IMAGE_REPOSITORY:-hermes-agent}"
-TAG="${TAG:-ai-sig}"
+HARBOR_APP_REPO="${HARBOR_APP_REPO:-hermes-agent}"
+HARBOR_APP_TAG="${HARBOR_APP_TAG:-ai-sig}"
+IMAGE_REPOSITORY="${IMAGE_REPOSITORY:-${HARBOR_APP_REPO}}"
+TAG="${TAG:-${HARBOR_APP_TAG}}"
 HARBOR_LOGIN_TARGET="${HARBOR_LOGIN_TARGET:-${HARBOR_URL}}"
 
 CONTAINERD_SOCK="${CONTAINERD_SOCK:-unix:///run/k3s/containerd/containerd.sock}"
 CONTAINERD_NAMESPACE="${CONTAINERD_NAMESPACE:-ai}"
+CONTAINER_TOOL="${CONTAINER_TOOL:-auto}"
 
 DOCKERFILE="${DOCKERFILE:-Dockerfile.ghcr}"
+UPDATE_SOURCE="${UPDATE_SOURCE:-1}"
 ALLOW_DIRTY="${ALLOW_DIRTY:-0}"
-FORCE="${FORCE:-0}"
+FORCE_SYNC="${FORCE_SYNC:-0}"
+FORCE="${FORCE:-${FORCE_SYNC}}"
 CLEAN_UNTRACKED="${CLEAN_UNTRACKED:-0}"
 PULL_BASE_IMAGES="${PULL_BASE_IMAGES:-0}"
 PUSH_IMAGE="${PUSH_IMAGE:-1}"
@@ -58,8 +63,11 @@ APT_SECURITY_MIRROR="${APT_SECURITY_MIRROR:-}"
 NPM_REGISTRY="${NPM_REGISTRY:-https://registry.npmjs.org}"
 PIP_INDEX_URL="${PIP_INDEX_URL:-}"
 UV_INDEX_URL="${UV_INDEX_URL:-}"
+HERMES_PIP_EXTRAS="${HERMES_PIP_EXTRAS:-messaging,cron,cli,web,pty,mcp}"
 PLAYWRIGHT_DOWNLOAD_HOST="${PLAYWRIGHT_DOWNLOAD_HOST:-}"
 BASE_IMAGE="${BASE_IMAGE:-}"
+APP_IMAGE="${APP_IMAGE:-${HARBOR_REGISTRY}/${HARBOR_PROJECT}/${IMAGE_REPOSITORY}:${TAG}}"
+LOCAL_APP_IMAGE="${LOCAL_APP_IMAGE:-}"
 TMP_APP_DOCKERFILE=""
 
 trap 'rm -f "${TMP_APP_DOCKERFILE:-}"' EXIT
@@ -75,6 +83,22 @@ fail() {
 
 require_cmd() {
   command -v "$1" >/dev/null 2>&1 || fail "missing required command: $1"
+}
+
+require_registry_image() {
+  local image="$1"
+  local image_path="${image%%@*}"
+  local last_component="${image_path##*/}"
+
+  if [[ "${last_component}" == *:* ]]; then
+    image_path="${image_path%:*}"
+  fi
+
+  local registry="${image_path%%/*}"
+
+  if [[ "${image_path}" != */* || ("${registry}" != *.* && "${registry}" != *:* && "${registry}" != "localhost") ]]; then
+    fail "image must include a real registry host, got: ${image}"
+  fi
 }
 
 image_exists() {
@@ -95,17 +119,44 @@ show_local_image_hint() {
   fi
 }
 
+use_nerdctl() {
+  CONTAINER_CMD=(nerdctl --address "${CONTAINERD_SOCK}" --namespace "${CONTAINERD_NAMESPACE}" --insecure-registry)
+  CONTAINER_TYPE="nerdctl"
+}
+
+use_docker() {
+  CONTAINER_CMD=(docker)
+  CONTAINER_TYPE="docker"
+}
+
 detect_container_tool() {
+  case "${CONTAINER_TOOL}" in
+    nerdctl)
+      require_cmd nerdctl
+      use_nerdctl
+      log "using container tool: nerdctl (${CONTAINERD_NAMESPACE}, ${CONTAINERD_SOCK})"
+      return
+      ;;
+    docker)
+      require_cmd docker
+      use_docker
+      log "using container tool: docker"
+      return
+      ;;
+    auto) ;;
+    *)
+      fail "unsupported CONTAINER_TOOL=${CONTAINER_TOOL}; use auto, nerdctl, or docker"
+      ;;
+  esac
+
   if command -v nerdctl >/dev/null 2>&1; then
-    CONTAINER_CMD=(nerdctl --address "${CONTAINERD_SOCK}" --namespace "${CONTAINERD_NAMESPACE}" --insecure-registry)
-    CONTAINER_TYPE="nerdctl"
+    use_nerdctl
     log "using container tool: nerdctl (${CONTAINERD_NAMESPACE}, ${CONTAINERD_SOCK})"
     return
   fi
 
   if command -v docker >/dev/null 2>&1; then
-    CONTAINER_CMD=(docker)
-    CONTAINER_TYPE="docker"
+    use_docker
     log "using container tool: docker"
     return
   fi
@@ -117,6 +168,11 @@ prepare_repo() {
   cd "$REPO_DIR"
   [ -d .git ] || fail "not a git repository: $REPO_DIR"
   [ -f "$DOCKERFILE" ] || fail "Dockerfile not found: $REPO_DIR/$DOCKERFILE"
+
+  if [ "$UPDATE_SOURCE" != "1" ]; then
+    log "UPDATE_SOURCE=$UPDATE_SOURCE: skipped source update"
+    return
+  fi
 
   git remote set-url "$REMOTE" "$REPO_URL"
 
@@ -193,6 +249,7 @@ ARG INSTALL_WHATSAPP_BRIDGE=0
 ARG NPM_REGISTRY=https://registry.npmjs.org
 ARG PIP_INDEX_URL=
 ARG UV_INDEX_URL=
+ARG HERMES_PIP_EXTRAS=${HERMES_PIP_EXTRAS}
 ARG PLAYWRIGHT_DOWNLOAD_HOST=
 
 ENV PLAYWRIGHT_BROWSERS_PATH=\${PLAYWRIGHT_BROWSERS_PATH_ARG}
@@ -211,7 +268,7 @@ build_image() {
   cd "$REPO_DIR"
 
   COMMIT="$(git rev-parse --short HEAD)"
-  FULL_IMAGE_NAME="${HARBOR_REGISTRY}/${HARBOR_PROJECT}/${IMAGE_REPOSITORY}:${TAG}"
+  FULL_IMAGE_NAME="$APP_IMAGE"
   local dockerfile_path="$DOCKERFILE"
 
   log "building container image"
@@ -238,6 +295,9 @@ build_image() {
   fi
 
   build_flags=(-t "$FULL_IMAGE_NAME" -f "$dockerfile_path")
+  if [ -n "$LOCAL_APP_IMAGE" ] && [ "$LOCAL_APP_IMAGE" != "$FULL_IMAGE_NAME" ]; then
+    build_flags+=(-t "$LOCAL_APP_IMAGE")
+  fi
   if [ "$PULL_BASE_IMAGES" = "1" ]; then
     build_flags+=(--pull)
   fi
@@ -258,6 +318,7 @@ build_image() {
       --build-arg "NPM_REGISTRY=$NPM_REGISTRY"
       --build-arg "PIP_INDEX_URL=$PIP_INDEX_URL"
       --build-arg "UV_INDEX_URL=$UV_INDEX_URL"
+      --build-arg "HERMES_PIP_EXTRAS=$HERMES_PIP_EXTRAS"
       --build-arg "PLAYWRIGHT_DOWNLOAD_HOST=$PLAYWRIGHT_DOWNLOAD_HOST"
     )
   fi
@@ -314,6 +375,8 @@ main() {
   require_cmd git
   detect_container_tool
   "${CONTAINER_CMD[@]}" version >/dev/null 2>&1 || fail "$CONTAINER_TYPE is not available"
+  require_registry_image "$APP_IMAGE"
+  require_registry_image "$HARBOR_BASE_IMAGE"
 
   prepare_repo
   login_harbor
